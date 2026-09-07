@@ -5,6 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "core:window:default",
+    "opener:default",
+    "dialog:default",
+    "notification:default"
   ]
 }

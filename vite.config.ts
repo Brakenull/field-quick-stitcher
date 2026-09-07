@@ -8,6 +8,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react()],
 
+  // maplibre-gl spawns its worker via a relative `new URL(..., import.meta.url)`;
+  // Vite's dep pre-bundler rewrites that path and breaks it, leaving the map with
+  // no worker (silently renders no data). Excluding it from optimizeDeps serves
+  // the package as-is from node_modules so the worker URL resolves correctly.
+  optimizeDeps: {
+    exclude: ["maplibre-gl"],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
