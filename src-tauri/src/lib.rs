@@ -3,12 +3,17 @@ mod core;
 mod models;
 #[cfg(test)]
 mod pipeline_test;
+#[cfg(test)]
+mod real_data_bench;
+#[cfg(test)]
+mod stitch_pipeline_test;
 mod utils;
 
 use std::sync::Mutex;
 
 use commands::export::export_report;
 use commands::inspect::inspect_directory;
+use commands::stitch::quick_stitch;
 use models::inspection_result::InspectionResult;
 
 /// Shared backend state, managed by Tauri and injected into commands via `State<AppState>`.
@@ -27,7 +32,7 @@ pub fn run() {
         .manage(AppState {
             last_inspection: Mutex::new(None),
         })
-        .invoke_handler(tauri::generate_handler![inspect_directory, export_report])
+        .invoke_handler(tauri::generate_handler![inspect_directory, export_report, quick_stitch])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

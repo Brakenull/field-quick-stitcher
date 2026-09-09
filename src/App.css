@@ -177,6 +177,41 @@ body,
   cursor: pointer;
 }
 
+.layer-control__opacity {
+  width: 100%;
+  cursor: default;
+}
+
+.layer-control__opacity input[type="range"] {
+  flex: 1;
+}
+
+.stitch-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stitch-panel > button {
+  background: #1f2937;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stitch-panel > button:hover:not(:disabled) {
+  border-color: #64748b;
+}
+
+.stitch-panel > button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .alert-panel {
   display: flex;
   flex-direction: column;
@@ -293,6 +328,13 @@ body,
 }
 
 .flight-map {
+  /* maplibre-gl.css's own .maplibregl-map rule also sets `position`, and
+     which one wins the cascade depends on stylesheet injection order (varies
+     between Vite dev and a production build) - width/height 100% keeps this
+     correctly sized regardless of whether position ends up absolute or
+     relative, instead of depending on that cascade order. */
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
 }

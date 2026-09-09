@@ -30,9 +30,12 @@ rayon = "1"
 rstar = "0.12"
 walkdir = "2"
 printpdf = "0.7"
+opencv = { version = "0.100.1", default-features = false, features = ["clang-runtime", "calib3d", "features2d", "imgproc", "imgcodecs"] }
+factrs = "0.3"
+tiff = "0.11"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

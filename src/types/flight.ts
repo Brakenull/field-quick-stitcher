@@ -67,3 +67,26 @@ export interface InspectionResult {
 }
 
 export type ScanStatus = "idle" | "scanning" | "done" | "error";
+
+export interface StitchResult {
+  geotiffPath: string;
+  previewPath: string;
+  /** MapLibre `image` source order: top-left, top-right, bottom-right, bottom-left. */
+  previewCorners: [LonLat, LonLat, LonLat, LonLat];
+  photosUsed: number;
+  photosSkipped: number;
+  confidentPairs: number;
+  durationMs: number;
+  warnings: string[];
+}
+
+export type StitchStatus = "idle" | "stitching" | "done" | "error";
+
+/** Mirrors `StitchStage` (`src-tauri/src/models/stitch_result.rs`), in pipeline order. */
+export type StitchStage = "downsampling" | "detecting-features" | "matching-pairs" | "aligning-poses" | "compositing" | "exporting";
+
+/** `percent` is 0-100 *within* `stage`, not overall pipeline progress. */
+export interface StitchProgress {
+  stage: StitchStage;
+  percent: number;
+}

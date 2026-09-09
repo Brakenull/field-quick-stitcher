@@ -10,11 +10,13 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@protomaps/basemaps": "^5.7.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-notification": "^2.4.0",
     "@tauri-apps/plugin-opener": "^2",
     "maplibre-gl": "^6.7.0",
+    "pmtiles": "^4.5.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

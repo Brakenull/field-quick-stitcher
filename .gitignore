@@ -25,3 +25,6 @@ dist-ssr
 
 # Claude folder
 .claude/*
+
+# Offline basemap tile package (44MB, regenerate via scripts/fetch-offline-basemap.ps1)
+public/offline_tiles/*.pmtiles

@@ -1,0 +1,42 @@
+# Template for .cargo/config.toml (gitignored - machine-specific, not read by cargo
+# under this .example name). Copy to config.toml and fill in the placeholders for
+# opencv (Phase 2, Quick Stitch) to build without manually sourcing vcvars.
+#
+# GDAL was dropped per quick-stitch.md section 3 (replaced by the pure-Rust
+# `tiff` crate for GeoTIFF I/O), so only opencv's native toolchain is needed now.
+#
+# To regenerate INCLUDE/LIB: open "Developer PowerShell for VS", run
+#   echo $env:INCLUDE
+#   echo $env:LIB
+# and paste the results below (semicolon-separated, single-quoted).
+
+[env]
+VCPKG_ROOT = '<path to your vcpkg checkout, e.g. C:\vcpkg>'
+VCPKGRS_DYNAMIC = "1"
+LIBCLANG_PATH = '<path to LLVM bin, e.g. C:\Program Files\LLVM\bin>'
+
+# opencv-rust's build script checks OPENCV_PACKAGE_NAME FIRST for every probe method
+# (pkg-config, cmake, AND vcpkg), before any of the more specific
+# OPENCV_PKGCONFIG_NAME/OPENCV_CMAKE_NAME/OPENCV_VCPKG_NAME vars. If your machine has
+# a global OPENCV_PACKAGE_NAME env var set (e.g. for an unrelated cmake project, where
+# OpenCVConfig.cmake really does export the package as "OpenCV"), it will silently
+# break the vcpkg probe here, since vcpkg installs the port as `opencv4`, not `OpenCV`
+# (confirm with `vcpkg list`). Force it back to the vcpkg port name for this crate:
+OPENCV_PACKAGE_NAME = { value = "opencv4", force = true }
+
+# clang (opencv's binding generator) needs the MSVC STL + Windows SDK headers/libs
+# that a "Developer Command Prompt" would normally set up via vcvars64.bat. Baked
+# in here so `cargo build`/`npm run tauri dev` work from a plain shell.
+INCLUDE = { value = '<paste $env:INCLUDE from a VS dev shell>', force = true }
+LIB = { value = '<paste $env:LIB from a VS dev shell>', force = true }
+
+# cargo's [env] cannot override PATH (confirmed empirically - force=true has no
+# effect on PATH specifically, cargo always keeps its own). So instead of trying
+# to get clang.exe onto PATH, point clang-sys straight at the binary - it reads
+# CLANG_PATH directly, bypassing PATH search entirely.
+CLANG_PATH = '<path to clang.exe, e.g. C:\Program Files\LLVM\bin\clang.exe>'
+
+# vcpkg's installed\x64-windows\bin carries the opencv DLLs (and their
+# transitive deps) needed at runtime. Since PATH can't be set here, add that
+# directory to your own Windows user PATH once (a normal one-time machine
+# setup step) so `cargo run`/`tauri dev` can load them.
