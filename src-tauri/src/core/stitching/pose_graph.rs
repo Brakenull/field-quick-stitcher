@@ -152,10 +152,6 @@ fn similarity_params(photo: &PhotoMeta, image_width_px: f64, image_height_px: f6
 /// Builds the "photo pixel -> world meters" matrix for a similarity transform
 /// with image "up" = north at theta = 0 (matches
 /// `core::geometry::compute_footprint`'s corner convention).
-fn similarity_matrix(p: &SimilarityParams) -> [[f64; 3]; 3] {
-    similarity_matrix_raw(p.tx, p.ty, p.theta, p.scale, p.cx, p.cy)
-}
-
 fn similarity_matrix_raw(tx: f64, ty: f64, theta: f64, scale: f64, cx: f64, cy: f64) -> [[f64; 3]; 3] {
     let (sin_t, cos_t) = theta.sin_cos();
     let m00 = scale * cos_t;
@@ -167,15 +163,6 @@ fn similarity_matrix_raw(tx: f64, ty: f64, theta: f64, scale: f64, cx: f64, cy: 
         [m10, m11, ty - cx * m10 - cy * m11],
         [0.0, 0.0, 1.0],
     ]
-}
-
-/// The GPS/yaw/altitude-derived initial pose for one photo (spec 4.1), with no
-/// visual information. `image_width_px`/`image_height_px` must be the
-/// dimensions of the image actually used for feature extraction (i.e. the
-/// downsampled size), so the resulting pose operates in the same pixel space
-/// as the homography edges.
-pub fn initial_pose(photo: &PhotoMeta, image_width_px: f64, image_height_px: f64, origin: (f64, f64)) -> Option<Pose> {
-    similarity_params(photo, image_width_px, image_height_px, origin).map(|p| Pose(similarity_matrix(&p)))
 }
 
 /// One directed visual edge: `h` maps pixel coordinates in photo `from` into
@@ -370,6 +357,15 @@ mod tests {
 
     fn identity_mat() -> Mat {
         Mat::eye(3, 3, CV_64F).unwrap().to_mat().unwrap()
+    }
+
+    /// The GPS/yaw/altitude-derived initial pose for one photo (spec 4.1),
+    /// with no visual information - built from the same primitives `align`
+    /// uses, so these tests exercise production logic rather than a
+    /// parallel implementation.
+    fn initial_pose(photo: &PhotoMeta, image_width_px: f64, image_height_px: f64, origin: (f64, f64)) -> Option<Pose> {
+        similarity_params(photo, image_width_px, image_height_px, origin)
+            .map(|p| Pose(similarity_matrix_raw(p.tx, p.ty, p.theta, p.scale, p.cx, p.cy)))
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::stitching::pipeline;
 use crate::models::photo_meta::PhotoMeta;
@@ -21,11 +21,20 @@ pub async fn quick_stitch(app: AppHandle, state: State<'_, AppState>, output_pat
     };
 
     let output_path = PathBuf::from(output_path);
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_scope = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         pipeline::run(photos, Path::new(&output_path), move |progress| {
             let _ = app.emit("stitch_progress", progress);
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    // The preview PNG lives wherever the user chose to save the GeoTIFF (via
+    // the save dialog), so it can't be covered by a static scope in
+    // tauri.conf.json - grant the asset protocol access to this one file now
+    // that it exists, so FlightMap's `convertFileSrc(previewPath)` can load it.
+    app_for_scope.asset_protocol_scope().allow_file(&result.preview_path).map_err(|e| e.to_string())?;
+
+    Ok(result)
 }

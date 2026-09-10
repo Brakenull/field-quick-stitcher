@@ -26,15 +26,11 @@ impl fmt::Display for DownsampleError {
     }
 }
 
-/// A downsampled image cached on disk, plus its size and the scale factor
-/// applied (so later steps could map keypoint coordinates back to
-/// full-resolution pixels if needed).
+/// A downsampled image cached on disk, plus its size.
 pub struct CachedImage {
     pub path: PathBuf,
     pub width: i32,
     pub height: i32,
-    /// downsampled_size / original_size (1.0 if the source was already small enough).
-    pub scale: f64,
 }
 
 /// Loads and downsamples one image, preserving aspect ratio so the longer edge
@@ -49,22 +45,22 @@ pub fn downsample_one(input_path: &Path, output_path: &Path) -> Result<CachedIma
 
     let (w, h) = (img.cols(), img.rows());
     let long_edge = w.max(h);
-    let (result, scale) = if long_edge <= TARGET_LONG_EDGE_PX {
-        (img, 1.0)
+    let result = if long_edge <= TARGET_LONG_EDGE_PX {
+        img
     } else {
         let scale = TARGET_LONG_EDGE_PX as f64 / long_edge as f64;
         let new_size = Size::new((w as f64 * scale).round() as i32, (h as f64 * scale).round() as i32);
         let mut resized = Mat::default();
         imgproc::resize(&img, &mut resized, new_size, 0.0, 0.0, imgproc::INTER_AREA)
             .map_err(|e| DownsampleError(format!("failed to resize {}: {e}", input_path.display())))?;
-        (resized, scale)
+        resized
     };
 
     let (width, height) = (result.cols(), result.rows());
     imgcodecs::imwrite_def(output_path, &result)
         .map_err(|e| DownsampleError(format!("failed to write {}: {e}", output_path.display())))?;
 
-    Ok(CachedImage { path: output_path.to_path_buf(), width, height, scale })
+    Ok(CachedImage { path: output_path.to_path_buf(), width, height })
 }
 
 /// Downsamples every path in parallel into `workspace`, reporting coarse
@@ -99,7 +95,7 @@ mod tests {
 
         let result = downsample_one(&input, &output).expect("downsample");
         assert_eq!(result.width, TARGET_LONG_EDGE_PX);
-        assert!((result.scale - TARGET_LONG_EDGE_PX as f64 / 4000.0).abs() < 1e-9);
+        assert_eq!(result.height, (3000.0 * TARGET_LONG_EDGE_PX as f64 / 4000.0).round() as i32, "aspect ratio should be preserved");
         assert!(output.exists(), "downsampled image should be written to disk");
 
         let reloaded = imgcodecs::imread(&output, imgcodecs::IMREAD_COLOR).unwrap();
@@ -116,7 +112,6 @@ mod tests {
         let result = downsample_one(&input, &output).expect("downsample");
         assert_eq!(result.width, 320);
         assert_eq!(result.height, 240);
-        assert_eq!(result.scale, 1.0);
     }
 
     #[test]

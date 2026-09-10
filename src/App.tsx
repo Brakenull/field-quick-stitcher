@@ -44,6 +44,16 @@ function App() {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const mapRef = useRef<FlightMapHandle>(null);
 
+  async function handleInspect(path: string) {
+    stitchState.reset();
+    await inspect(path);
+  }
+
+  function handleReset() {
+    stitchState.reset();
+    reset();
+  }
+
   async function handleQuickStitch() {
     const outputPath = await save({
       defaultPath: "quick_stitch.tif",
@@ -76,7 +86,7 @@ function App() {
         </header>
 
         {status !== "done" && (
-          <Dropzone disabled={status === "scanning"} onFolderSelected={inspect} />
+          <Dropzone disabled={status === "scanning"} onFolderSelected={handleInspect} />
         )}
 
         {status === "scanning" && (
@@ -135,7 +145,7 @@ function App() {
             <div className="export-row">
               <button onClick={() => handleExport("json")}>Export JSON</button>
               <button onClick={() => handleExport("pdf")}>Export PDF</button>
-              <button className="ghost" onClick={reset}>
+              <button className="ghost" onClick={handleReset}>
                 Scan another card
               </button>
             </div>

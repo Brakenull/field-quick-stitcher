@@ -15,14 +15,16 @@ VCPKG_ROOT = '<path to your vcpkg checkout, e.g. C:\vcpkg>'
 VCPKGRS_DYNAMIC = "1"
 LIBCLANG_PATH = '<path to LLVM bin, e.g. C:\Program Files\LLVM\bin>'
 
-# opencv-rust's build script checks OPENCV_PACKAGE_NAME FIRST for every probe method
-# (pkg-config, cmake, AND vcpkg), before any of the more specific
-# OPENCV_PKGCONFIG_NAME/OPENCV_CMAKE_NAME/OPENCV_VCPKG_NAME vars. If your machine has
-# a global OPENCV_PACKAGE_NAME env var set (e.g. for an unrelated cmake project, where
-# OpenCVConfig.cmake really does export the package as "OpenCV"), it will silently
-# break the vcpkg probe here, since vcpkg installs the port as `opencv4`, not `OpenCV`
-# (confirm with `vcpkg list`). Force it back to the vcpkg port name for this crate:
-OPENCV_PACKAGE_NAME = { value = "opencv4", force = true }
+# opencv-rust's build script checks the generic OPENCV_PACKAGE_NAME env var FIRST for
+# every probe method (pkg-config, cmake, AND vcpkg) - it shadows the more specific
+# OPENCV_PKGCONFIG_NAME/OPENCV_CMAKE_NAME/OPENCV_VCPKG_NAME vars whenever set. Don't
+# set OPENCV_PACKAGE_NAME globally on your machine (even for an unrelated cmake
+# project) - it will silently break the vcpkg probe here, since vcpkg installs the
+# port as `opencv4` (confirm with `vcpkg list`), not `OpenCV`. Instead set, as
+# machine-wide User/System env vars (outside this file):
+#   OPENCV_VCPKG_NAME=opencv4
+# and leave OPENCV_PACKAGE_NAME unset so cmake probing (package name "OpenCV") still
+# works too, should you ever get cmake/ninja installed.
 
 # clang (opencv's binding generator) needs the MSVC STL + Windows SDK headers/libs
 # that a "Developer Command Prompt" would normally set up via vcvars64.bat. Baked
