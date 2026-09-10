@@ -66,10 +66,13 @@ fn real_stitch_benchmark() {
     assert!(with_footprint.len() >= 2, "not enough photos with full metadata to stitch");
 
     let output_path = std::env::temp_dir().join("jablunkov_stitch_bench.tif");
+    let onnx_model_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint-ort.onnx"));
     println!("=== Starting quick_stitch pipeline, output -> {} ===", output_path.display());
 
     let stitch_start = Instant::now();
-    let result = pipeline::run(with_footprint, &output_path, |progress| println!("{:?}: {}%", progress.stage, progress.percent));
+    let result = pipeline::run(with_footprint, &output_path, onnx_model_path, |progress| {
+        println!("{:?}: {}%", progress.stage, progress.percent)
+    });
     let elapsed = stitch_start.elapsed();
 
     match result {

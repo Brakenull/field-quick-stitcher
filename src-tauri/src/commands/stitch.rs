@@ -20,10 +20,15 @@ pub async fn quick_stitch(app: AppHandle, state: State<'_, AppState>, output_pat
         result.photos.iter().filter(|p| p.footprint.is_some()).cloned().collect()
     };
 
+    let onnx_model_path = app
+        .path()
+        .resolve("resources/superpoint-ort.onnx", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| e.to_string())?;
+
     let output_path = PathBuf::from(output_path);
     let app_for_scope = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        pipeline::run(photos, Path::new(&output_path), move |progress| {
+        pipeline::run(photos, Path::new(&output_path), &onnx_model_path, move |progress| {
             let _ = app.emit("stitch_progress", progress);
         })
     })

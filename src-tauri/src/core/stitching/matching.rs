@@ -1,6 +1,10 @@
 //! Guided descriptor matching between GPS-neighbor photo pairs only (Quick
 //! Stitch spec 2b/4.2) - never all-pairs. Uses Hamming distance (ORB is a
 //! binary descriptor) plus Lowe's ratio test to reject ambiguous matches.
+//!
+//! Dormant alongside `features.rs` - see that module's doc comment.
+
+#![allow(dead_code)]
 
 use opencv::core::{DMatch, Vector, NORM_HAMMING};
 use opencv::features2d::{BFMatcher, DescriptorMatcherTraitConst};

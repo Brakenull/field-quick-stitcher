@@ -17,19 +17,29 @@ use crate::models::stitch_result::{StitchProgress, StitchResult, StitchStage};
 use crate::utils::temp_workspace::TempWorkspace;
 use crate::utils::thread_pool::par_map_with_progress;
 
-use super::{downsample, features, geotiff_export, homography, matching, mosaic, neighbor_index, pose_graph};
+use super::{downsample, geotiff_export, homography, mosaic, neighbor_index, onnx_matcher::OnnxMatcher, pose_graph};
 
 const EARTH_RADIUS_M: f64 = 6_378_137.0;
 
 /// Runs the full pipeline over `photos` (which must already be filtered to
 /// only those with a computable footprint - GPS/yaw/altitude/focal/sensor),
 /// writing the resulting GeoTIFF + PNG preview to paths derived from
-/// `output_path`. `on_progress` is called throughout - each call names the
-/// pipeline stage currently running plus a 0-100 percent *within* that stage
-/// - so the caller can show real progress instead of a bar that stalls after
-/// downsampling while feature matching, pose alignment, and (the usually
-/// dominant) mosaic compositing run silently.
-pub fn run(photos: Vec<PhotoMeta>, output_path: &Path, on_progress: impl Fn(StitchProgress) + Sync) -> Result<StitchResult, String> {
+/// `output_path`. `onnx_model_path` is the fused SuperPoint+LightGlue model
+/// (`resources/superpoint-ort.onnx`) used for feature matching - see
+/// `onnx_matcher.rs` for why this replaces the separate ORB-extract-then-
+/// BFMatcher-match stages `features.rs`/`matching.rs` still hold (dormant,
+/// not called from here) for a possible future CPU fallback path.
+/// `on_progress` is called throughout - each call names the pipeline stage
+/// currently running plus a 0-100 percent *within* that stage - so the caller
+/// can show real progress instead of a bar that stalls after downsampling
+/// while feature matching, pose alignment, and (the usually dominant) mosaic
+/// compositing run silently.
+pub fn run(
+    photos: Vec<PhotoMeta>,
+    output_path: &Path,
+    onnx_model_path: &Path,
+    on_progress: impl Fn(StitchProgress) + Sync,
+) -> Result<StitchResult, String> {
     let start = Instant::now();
     if photos.len() < 2 {
         return Err("Need at least 2 photos with full metadata (GPS/yaw/altitude/focal/sensor) to stitch.".to_string());
@@ -63,36 +73,38 @@ pub fn run(photos: Vec<PhotoMeta>, output_path: &Path, on_progress: impl Fn(Stit
 
     let image_paths: Vec<PathBuf> = cached_images.iter().map(|c| c.path.clone()).collect();
     let image_sizes: Vec<(f64, f64)> = cached_images.iter().map(|c| (c.width as f64, c.height as f64)).collect();
+    // Matching itself needs the *original* full-resolution photos (see
+    // onnx_matcher.rs's doc comment for why), not the downsampled cache above
+    // - `image_paths`/`image_sizes` stay the coordinate space everything else
+    // (homography edges via `target_size_*`, pose graph, mosaic) works in.
+    let original_paths: Vec<PathBuf> = photos.iter().map(|p| PathBuf::from(&p.path)).collect();
 
-    // Detected in parallel and dropped one at a time - only the (much
-    // smaller) keypoints/descriptors are kept for the rest of the run.
-    let feature_results: Vec<opencv::Result<features::ImageFeatures>> = par_map_with_progress(
-        image_paths.clone(),
-        |path| {
-            let img = imgcodecs::imread(&path, imgcodecs::IMREAD_COLOR)?;
-            features::detect(&img)
-        },
-        |p| report(StitchStage::DetectingFeatures, p),
-    );
-    let image_features: Vec<features::ImageFeatures> =
-        feature_results.into_iter().collect::<opencv::Result<Vec<_>>>().map_err(|e| e.to_string())?;
+    // Loading the ~50MB fused model is the only slow, one-time part of this
+    // stage - report it as done immediately rather than adding a separate
+    // progress phase the frontend would need a new label for.
+    report(StitchStage::DetectingFeatures, 0);
+    let matcher = OnnxMatcher::load(onnx_model_path)?;
+    report(StitchStage::DetectingFeatures, 100);
 
     let radius_m = neighbor_index::typical_radius_m(&photos);
     let pairs = neighbor_index::find_neighbor_pairs(&photos, radius_m);
 
-    // Matching + homography estimation is independent per pair - the only
-    // shared state is the (read-only) feature set each pair looks up.
-    let pair_results: Vec<opencv::Result<Option<pose_graph::Edge>>> = par_map_with_progress(
+    // Feature extraction + matching + homography estimation all happen
+    // together per pair now (see onnx_matcher.rs) - image I/O and
+    // preprocessing still run in parallel across pairs, only the actual ONNX
+    // inference call serializes (the matcher's session is behind a Mutex).
+    let pair_results: Vec<Result<Option<pose_graph::Edge>, String>> = par_map_with_progress(
         pairs,
-        |(i, j)| -> opencv::Result<Option<pose_graph::Edge>> {
-            let matches = matching::match_pair(&image_features[i], &image_features[j])?;
-            let edge = homography::estimate(&image_features[i], &image_features[j], &matches)?;
+        |(i, j)| -> Result<Option<pose_graph::Edge>, String> {
+            let point_matches = matcher.match_pair(&original_paths[i], &original_paths[j], image_sizes[i], image_sizes[j])?;
+            let correspondences: Vec<(opencv::core::Point2f, opencv::core::Point2f)> =
+                point_matches.iter().map(|m| (m.a, m.b)).collect();
+            let edge = homography::estimate(&correspondences).map_err(|e| e.to_string())?;
             Ok(edge.map(|h| pose_graph::Edge { from: i, to: j, h }))
         },
         |p| report(StitchStage::MatchingPairs, p),
     );
-    let pair_results: Vec<Option<pose_graph::Edge>> =
-        pair_results.into_iter().collect::<opencv::Result<Vec<_>>>().map_err(|e| e.to_string())?;
+    let pair_results: Vec<Option<pose_graph::Edge>> = pair_results.into_iter().collect::<Result<Vec<_>, String>>()?;
 
     let mut edges = Vec::new();
     for edge in pair_results.into_iter().flatten() {

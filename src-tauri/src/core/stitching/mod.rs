@@ -10,5 +10,6 @@ pub mod homography;
 pub mod matching;
 pub mod mosaic;
 pub mod neighbor_index;
+pub mod onnx_matcher;
 pub mod pipeline;
 pub mod pose_graph;

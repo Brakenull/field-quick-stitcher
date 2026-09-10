@@ -3,11 +3,9 @@
 //! pair of overlapping shots.
 
 use opencv::calib3d;
-use opencv::core::{DMatch, Mat, Point2f, Vector};
+use opencv::core::{Mat, Point2f, Vector};
 use opencv::prelude::*;
 use opencv::Result;
-
-use super::features::ImageFeatures;
 
 /// Minimum matches required to even attempt a homography fit.
 const MIN_MATCHES: usize = 8;
@@ -23,19 +21,22 @@ pub struct HomographyEdge {
     pub match_count: usize,
 }
 
-/// Estimates `H` such that `b_point ~= H * a_point` for the given matches
-/// (`query_idx` into `a`'s keypoints, `train_idx` into `b`'s), returning `None`
-/// if there isn't enough evidence to trust the fit (too few matches/inliers).
-pub fn estimate(a: &ImageFeatures, b: &ImageFeatures, matches: &[DMatch]) -> Result<Option<HomographyEdge>> {
+/// Estimates `H` such that `b_point ~= H * a_point` for the given matched
+/// point pairs (`a`'s pixel coords, `b`'s pixel coords), returning `None` if
+/// there isn't enough evidence to trust the fit (too few matches/inliers).
+/// Deliberately generic over how the correspondences were found (ORB+BFMatcher
+/// or a fused ONNX extractor+matcher both just produce point pairs) rather
+/// than taking a feature-detector-specific type.
+pub fn estimate(matches: &[(Point2f, Point2f)]) -> Result<Option<HomographyEdge>> {
     if matches.len() < MIN_MATCHES {
         return Ok(None);
     }
 
     let mut src = Vector::<Point2f>::new();
     let mut dst = Vector::<Point2f>::new();
-    for m in matches {
-        src.push(a.keypoints[m.query_idx as usize]);
-        dst.push(b.keypoints[m.train_idx as usize]);
+    for &(a, b) in matches {
+        src.push(a);
+        dst.push(b);
     }
 
     let mut mask = Mat::default();
@@ -65,8 +66,13 @@ fn count_inliers(mask: &Mat) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::stitching::features::ImageFeatures;
     use crate::core::stitching::{features, matching};
-    use opencv::core::{Scalar, Vec3b, CV_8UC3};
+    use opencv::core::{DMatch, Scalar, Vec3b, CV_8UC3};
+
+    fn to_point_pairs(a: &ImageFeatures, b: &ImageFeatures, matches: &[DMatch]) -> Vec<(Point2f, Point2f)> {
+        matches.iter().map(|m| (a.keypoints[m.query_idx as usize], b.keypoints[m.train_idx as usize])).collect()
+    }
 
     /// Pseudo-random noise texture: gives ORB unambiguous, unique local
     /// patches (a checkerboard's repeating corners would make Lowe's ratio
@@ -89,8 +95,9 @@ mod tests {
         let a = features::detect(&img).unwrap();
         let b = features::detect(&img).unwrap();
         let matches = matching::match_pair(&a, &b).unwrap();
+        let pairs = to_point_pairs(&a, &b, &matches);
 
-        let edge = estimate(&a, &b, &matches).unwrap().expect("should find a confident homography");
+        let edge = estimate(&pairs).unwrap().expect("should find a confident homography");
         assert!(edge.inlier_count >= MIN_MATCHES);
 
         // H should be close to identity (up to homogeneous scale): check the
@@ -107,7 +114,8 @@ mod tests {
         let blank = Mat::new_rows_cols_with_default(240, 240, CV_8UC3, Scalar::all(128.0)).unwrap();
         let b = features::detect(&blank).unwrap();
         let matches = matching::match_pair(&a, &b).unwrap();
+        let pairs = to_point_pairs(&a, &b, &matches);
 
-        assert!(estimate(&a, &b, &matches).unwrap().is_none());
+        assert!(estimate(&pairs).unwrap().is_none());
     }
 }
