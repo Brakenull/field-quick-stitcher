@@ -1,11 +1,10 @@
 //! ORB feature detection on downsampled grayscale images (Quick Stitch spec 2c):
 //! a binary-descriptor detector, ~10x faster than SIFT/SURF and royalty-free.
 //!
-//! Dormant, not `pipeline.rs`, since `onnx_matcher.rs`'s fused ONNX model
-//! took over feature matching - kept (with `matching.rs`) as the planned CPU
-//! fallback for machines without a usable ONNX/DirectML device, once that
-//! runtime switch is built. `#[allow(dead_code)]` since nothing outside this
-//! module's and `homography.rs`'s own tests calls it yet.
+//! Dormant, not `pipeline.rs`, since `onnx_matcher.rs`'s ONNX-based
+//! extractor+matcher took over feature matching - kept (with `matching.rs`)
+//! as a possible fallback if that ever needs one. `#[allow(dead_code)]` since
+//! nothing outside this module's and `homography.rs`'s own tests calls it yet.
 
 #![allow(dead_code)]
 

@@ -5,11 +5,11 @@
 //!
 //! This used to run against a synthetic fixture (two crops sharing pixel-
 //! identical content, or even hand-drawn shapes), which worked fine for the
-//! ORB path but not for `onnx_matcher.rs`'s fused SuperPoint+LightGlue model:
+//! ORB path but not for `onnx_matcher.rs`'s SuperPoint+LightGlue model:
 //! cropping either photo to an arbitrary sub-region - even the *same* region
 //! of both, guaranteeing pixel-perfect correspondence - repeatedly produced
-//! zero or near-zero matches, while the exact same two full-resolution files
-//! reliably produce 550+ (see `onnx_matcher::tests::matches_two_real_overlapping_photos`).
+//! zero or near-zero matches, while the exact same two real files reliably
+//! produce hundreds (see `onnx_matcher::tests::extracts_and_matches_two_real_overlapping_photos`).
 //! Diagnosed as two compounding issues, not a pipeline bug: (1) sequential
 //! flight photos overlap at their *edges*, not their centers, so an arbitrary
 //! same-sized crop of each has no guarantee of covering the same ground at
@@ -67,8 +67,9 @@ fn full_stitch_pipeline_on_two_real_overlapping_photos() {
 
     let out_dir = tempfile::tempdir().expect("tempdir");
     let output_path = out_dir.path().join("mosaic.tif");
-    let onnx_model_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint-ort.onnx"));
-    let result = pipeline::run(photos, &output_path, onnx_model_path, |_| {}).expect("pipeline should succeed");
+    let extractor_model_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint.onnx"));
+    let matcher_model_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint_lightglue.trt.onnx"));
+    let result = pipeline::run(photos, &output_path, extractor_model_path, matcher_model_path, |_| {}).expect("pipeline should succeed");
 
     assert_eq!(result.photos_used, 2);
     assert_eq!(result.photos_skipped, 0);

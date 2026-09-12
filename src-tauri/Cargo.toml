@@ -34,7 +34,7 @@ opencv = { version = "0.100.1", default-features = false, features = ["clang-run
 factrs = "0.3"
 tiff = "0.11"
 tempfile = "3"
-ort = { version = "2.0.0-rc.13", features = ["ndarray"] }
+ort = { version = "2.0.0-rc.13", features = ["ndarray", "directml"] }
 ndarray = "0.17"
 
 [dev-dependencies]

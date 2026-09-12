@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -20,15 +21,33 @@ pub async fn quick_stitch(app: AppHandle, state: State<'_, AppState>, output_pat
         result.photos.iter().filter(|p| p.footprint.is_some()).cloned().collect()
     };
 
-    let onnx_model_path = app
+    let extractor_model_path = app
         .path()
-        .resolve("resources/superpoint-ort.onnx", tauri::path::BaseDirectory::Resource)
+        .resolve("resources/superpoint.onnx", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| e.to_string())?;
+    let matcher_model_path = app
+        .path()
+        .resolve("resources/superpoint_lightglue.trt.onnx", tauri::path::BaseDirectory::Resource)
         .map_err(|e| e.to_string())?;
 
     let output_path = PathBuf::from(output_path);
     let app_for_scope = app.clone();
+
+    // TEMPORARY DIAGNOSTIC: mirrors every progress tick to a log file
+    // (independent of the `stitch_progress` Tauri event/UI) so progress can
+    // be confirmed even if the frontend's event listener stops updating -
+    // see conversation history for why (WebView2 renderer discard under
+    // memory pressure is the leading theory). Remove once confirmed.
+    let log_path = std::env::temp_dir().join("quick_stitch_progress.log");
+    let _ = std::fs::write(&log_path, format!("=== quick_stitch started - log at {} ===\n", log_path.display()));
+    let log_start = std::time::Instant::now();
+    let log_path_for_closure = log_path.clone();
+
     let result = tauri::async_runtime::spawn_blocking(move || {
-        pipeline::run(photos, Path::new(&output_path), &onnx_model_path, move |progress| {
+        pipeline::run(photos, Path::new(&output_path), &extractor_model_path, &matcher_model_path, move |progress| {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path_for_closure) {
+                let _ = writeln!(f, "{:>8.1}s  {:?}: {}%", log_start.elapsed().as_secs_f64(), progress.stage, progress.percent);
+            }
             let _ = app.emit("stitch_progress", progress);
         })
     })

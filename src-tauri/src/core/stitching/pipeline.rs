@@ -17,27 +17,28 @@ use crate::models::stitch_result::{StitchProgress, StitchResult, StitchStage};
 use crate::utils::temp_workspace::TempWorkspace;
 use crate::utils::thread_pool::par_map_with_progress;
 
-use super::{downsample, geotiff_export, homography, mosaic, neighbor_index, onnx_matcher::OnnxMatcher, pose_graph};
+use super::{downsample, geotiff_export, homography, mosaic, neighbor_index, onnx_matcher, onnx_matcher::OnnxMatcher, pose_graph};
 
 const EARTH_RADIUS_M: f64 = 6_378_137.0;
 
 /// Runs the full pipeline over `photos` (which must already be filtered to
 /// only those with a computable footprint - GPS/yaw/altitude/focal/sensor),
 /// writing the resulting GeoTIFF + PNG preview to paths derived from
-/// `output_path`. `onnx_model_path` is the fused SuperPoint+LightGlue model
-/// (`resources/superpoint-ort.onnx`) used for feature matching - see
-/// `onnx_matcher.rs` for why this replaces the separate ORB-extract-then-
-/// BFMatcher-match stages `features.rs`/`matching.rs` still hold (dormant,
-/// not called from here) for a possible future CPU fallback path.
-/// `on_progress` is called throughout - each call names the pipeline stage
-/// currently running plus a 0-100 percent *within* that stage - so the caller
-/// can show real progress instead of a bar that stalls after downsampling
-/// while feature matching, pose alignment, and (the usually dominant) mosaic
-/// compositing run silently.
+/// `output_path`. `extractor_model_path`/`matcher_model_path` are the
+/// standalone SuperPoint extractor and LightGlue matcher (see
+/// `onnx_matcher.rs` for why this replaces both the earlier fused
+/// SuperPoint+LightGlue graph and the ORB-extract-then-BFMatcher-match stages
+/// `features.rs`/`matching.rs` still hold, dormant, for a possible future CPU
+/// fallback path). `on_progress` is called throughout - each call names the
+/// pipeline stage currently running plus a 0-100 percent *within* that stage
+/// - so the caller can show real progress instead of a bar that stalls after
+/// downsampling while feature extraction, matching, pose alignment, and (the
+/// usually dominant) mosaic compositing run silently.
 pub fn run(
     photos: Vec<PhotoMeta>,
     output_path: &Path,
-    onnx_model_path: &Path,
+    extractor_model_path: &Path,
+    matcher_model_path: &Path,
     on_progress: impl Fn(StitchProgress) + Sync,
 ) -> Result<StitchResult, String> {
     let start = Instant::now();
@@ -48,6 +49,12 @@ pub fn run(
 
     let workspace = TempWorkspace::new().map_err(|e| e.to_string())?;
     let paths: Vec<PathBuf> = photos.iter().map(|p| PathBuf::from(&p.path)).collect();
+    // Explicit 0% before each parallel stage below (this one included) - the
+    // stage's own progress only ticks once the first ~10% of its items
+    // finish, which on a slow machine can be silent for minutes; an upfront
+    // 0% lets the UI show the stage has actually started rather than looking
+    // stuck on the previous stage's 100%.
+    report(StitchStage::Downsampling, 0);
     let downsampled = downsample::downsample_all(paths, &workspace, |p| report(StitchStage::Downsampling, p));
 
     let mut warnings = Vec::new();
@@ -73,30 +80,31 @@ pub fn run(
 
     let image_paths: Vec<PathBuf> = cached_images.iter().map(|c| c.path.clone()).collect();
     let image_sizes: Vec<(f64, f64)> = cached_images.iter().map(|c| (c.width as f64, c.height as f64)).collect();
-    // Matching itself needs the *original* full-resolution photos (see
-    // onnx_matcher.rs's doc comment for why), not the downsampled cache above
-    // - `image_paths`/`image_sizes` stay the coordinate space everything else
-    // (homography edges via `target_size_*`, pose graph, mosaic) works in.
-    let original_paths: Vec<PathBuf> = photos.iter().map(|p| PathBuf::from(&p.path)).collect();
 
-    // Loading the ~50MB fused model is the only slow, one-time part of this
-    // stage - report it as done immediately rather than adding a separate
-    // progress phase the frontend would need a new label for.
+    let matcher = OnnxMatcher::load(extractor_model_path, matcher_model_path)?;
+
+    // Extraction runs once per photo, directly on the downsampled cache
+    // (see onnx_matcher.rs's doc comment for why that's safe for this
+    // standalone extractor, unlike the earlier fused model) - image I/O runs
+    // in parallel across photos, only the ONNX inference call itself
+    // serializes (the extractor's session is behind a Mutex).
     report(StitchStage::DetectingFeatures, 0);
-    let matcher = OnnxMatcher::load(onnx_model_path)?;
-    report(StitchStage::DetectingFeatures, 100);
+    let features: Vec<Result<onnx_matcher::FeatureSet, String>> =
+        par_map_with_progress(image_paths.clone(), |path| matcher.extract(&path), |p| report(StitchStage::DetectingFeatures, p));
+    let features: Vec<onnx_matcher::FeatureSet> = features.into_iter().collect::<Result<Vec<_>, String>>()?;
 
     let radius_m = neighbor_index::typical_radius_m(&photos);
     let pairs = neighbor_index::find_neighbor_pairs(&photos, radius_m);
 
-    // Feature extraction + matching + homography estimation all happen
-    // together per pair now (see onnx_matcher.rs) - image I/O and
-    // preprocessing still run in parallel across pairs, only the actual ONNX
-    // inference call serializes (the matcher's session is behind a Mutex).
+    // Matching + homography estimation happen together per pair now (see
+    // onnx_matcher.rs) - cheap relative to extraction since only cached
+    // keypoint/descriptor tensors are involved, not pixels, but the matcher's
+    // session is still behind a Mutex so inference calls serialize.
+    report(StitchStage::MatchingPairs, 0);
     let pair_results: Vec<Result<Option<pose_graph::Edge>, String>> = par_map_with_progress(
         pairs,
         |(i, j)| -> Result<Option<pose_graph::Edge>, String> {
-            let point_matches = matcher.match_pair(&original_paths[i], &original_paths[j], image_sizes[i], image_sizes[j])?;
+            let point_matches = matcher.match_pair(&features[i], &features[j])?;
             let correspondences: Vec<(opencv::core::Point2f, opencv::core::Point2f)> =
                 point_matches.iter().map(|m| (m.a, m.b)).collect();
             let edge = homography::estimate(&correspondences).map_err(|e| e.to_string())?;
@@ -128,6 +136,7 @@ pub fn run(
     let meters_per_pixel = average_meters_per_pixel(&photos, &image_sizes)
         .ok_or_else(|| "Could not determine a ground resolution for the mosaic.".to_string())?;
 
+    report(StitchStage::Compositing, 0);
     let mosaic = mosaic::compose(&image_paths, &image_sizes, &poses, meters_per_pixel, |p| report(StitchStage::Compositing, p))
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No photo could be placed in the mosaic.".to_string())?;
