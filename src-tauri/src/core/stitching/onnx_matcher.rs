@@ -53,6 +53,13 @@
 //! apparently cost more in allocator contention than the pooling gained in
 //! parallelism. Back to one shared session; revisit only with a way to pool
 //! without disabling each session's arena.
+//!
+//! The extractor and matcher are two separate types (`FeatureExtractor`,
+//! `PairMatcher`), not one struct holding both sessions, specifically so
+//! `pipeline.rs`'s `match_pairs_onnx` can drop the extractor - and with it,
+//! its DirectML (GPU) session's VRAM/driver allocations - as soon as the
+//! DetectingFeatures stage finishes, instead of holding that GPU session
+//! open (idle) through the whole CPU-only MatchingPairs stage that follows.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -91,9 +98,18 @@ pub struct PointMatch {
 /// to ~1.0 for confident ones, unlike ORB's Hamming distance).
 const MIN_MATCH_SCORE: f32 = 0.2;
 
-pub struct OnnxMatcher {
-    extractor: Mutex<Session>,
-    matcher: Mutex<Session>,
+/// Owns just the SuperPoint extractor's DirectML session - kept separate from
+/// `PairMatcher` so it can be dropped (freeing its GPU session) the moment
+/// the DetectingFeatures stage finishes, before the CPU-only MatchingPairs
+/// stage starts (see module doc comment).
+pub struct FeatureExtractor {
+    session: Mutex<Session>,
+}
+
+/// Owns just the LightGlue matcher's CPU session - loaded separately from,
+/// and outliving, `FeatureExtractor` (see module doc comment).
+pub struct PairMatcher {
+    session: Mutex<Session>,
 }
 
 /// Normalizes pixel-space keypoints into LightGlue's expected input range,
@@ -110,19 +126,19 @@ fn normalize_keypoints(keypoints: &[Point2f], width: u32, height: u32) -> Array3
     normalized
 }
 
-impl OnnxMatcher {
-    pub fn load(extractor_path: &Path, matcher_path: &Path) -> Result<Self, String> {
-        // Memory pattern optimization is disabled on both sessions - it caches a distinct
+impl FeatureExtractor {
+    /// Loads just the SuperPoint extractor onto DirectML - see module doc
+    /// comment for why this is safe now (1600px, not full native res).
+    pub fn load(extractor_path: &Path) -> Result<Self, String> {
+        // Memory pattern optimization is disabled - it caches a distinct
         // allocation plan per input shape combination, which never stops
         // growing here since keypoint counts (and therefore tensor shapes)
-        // differ on essentially every photo/pair; confirmed on the real
+        // differ on essentially every photo; confirmed on the real
         // 156-photo Jablunkov survey (see `real_data_bench.rs`), where
         // leaving it enabled grew the process past 4GB and climbing well
         // before the matching stage finished. `ort`'s own docs recommend
         // disabling it for exactly this "input size varies" case.
-        // DirectML for the extractor - see module doc comment for why this
-        // is safe now (1600px, not full native res).
-        let extractor = Session::builder()
+        let session = Session::builder()
             .map_err(|e| e.to_string())?
             .with_execution_providers([ort::ep::DirectML::default().build()])
             .map_err(|e| e.to_string())?
@@ -130,14 +146,8 @@ impl OnnxMatcher {
             .map_err(|e| e.to_string())?
             .commit_from_file(extractor_path)
             .map_err(|e| e.to_string())?;
-        let matcher = Session::builder()
-            .map_err(|e| e.to_string())?
-            .with_memory_pattern(false)
-            .map_err(|e| e.to_string())?
-            .commit_from_file(matcher_path)
-            .map_err(|e| e.to_string())?;
 
-        Ok(Self { extractor: Mutex::new(extractor), matcher: Mutex::new(matcher) })
+        Ok(Self { session: Mutex::new(session) })
     }
 
     /// Extracts SuperPoint keypoints + descriptors from `image_path` (the
@@ -155,7 +165,7 @@ impl OnnxMatcher {
         }
 
         let (keypoint_count, kp_data, desc_data) = {
-            let mut session = self.extractor.lock().map_err(|_| "SuperPoint session lock poisoned".to_string())?;
+            let mut session = self.session.lock().map_err(|_| "SuperPoint session lock poisoned".to_string())?;
             let input = TensorRef::from_array_view(&tensor).map_err(|e| e.to_string())?;
             let outputs = session.run(ort::inputs!["image" => input]).map_err(|e| e.to_string())?;
             let (kp_shape, kp_data) = outputs["keypoints"].try_extract_tensor::<i64>().map_err(|e| e.to_string())?;
@@ -170,14 +180,31 @@ impl OnnxMatcher {
 
         Ok(FeatureSet { keypoints, normalized, descriptors })
     }
+}
+
+impl PairMatcher {
+    /// Loads just the LightGlue matcher, on the default CPU execution
+    /// provider - see module doc comment for why GPU dispatch wouldn't help
+    /// here.
+    pub fn load(matcher_path: &Path) -> Result<Self, String> {
+        let session = Session::builder()
+            .map_err(|e| e.to_string())?
+            .with_memory_pattern(false)
+            .map_err(|e| e.to_string())?
+            .commit_from_file(matcher_path)
+            .map_err(|e| e.to_string())?;
+
+        Ok(Self { session: Mutex::new(session) })
+    }
 
     /// Matches two already-extracted feature sets. Cheap relative to
-    /// `extract` - only keypoint/descriptor tensors cross the ONNX boundary,
-    /// not pixels - but still serializes behind the matcher session's lock
-    /// (see module doc comment for why this isn't pooled).
+    /// `FeatureExtractor::extract` - only keypoint/descriptor tensors cross
+    /// the ONNX boundary, not pixels - but still serializes behind the
+    /// matcher session's lock (see module doc comment for why this isn't
+    /// pooled).
     pub fn match_pair(&self, a: &FeatureSet, b: &FeatureSet) -> Result<Vec<PointMatch>, String> {
         let (match_count, m_data, s_data) = {
-            let mut session = self.matcher.lock().map_err(|_| "LightGlue session lock poisoned".to_string())?;
+            let mut session = self.session.lock().map_err(|_| "LightGlue session lock poisoned".to_string())?;
             let outputs = session
                 .run(ort::inputs![
                     "kpts0" => TensorRef::from_array_view(&a.normalized).map_err(|e| e.to_string())?,
@@ -233,10 +260,12 @@ mod tests {
         let a_downsampled = downsample::downsample_one(&a_path, &workspace.path().join("a.jpg")).expect("downsample a");
         let b_downsampled = downsample::downsample_one(&b_path, &workspace.path().join("b.jpg")).expect("downsample b");
 
-        let matcher = OnnxMatcher::load(&extractor_path(), &matcher_path()).expect("load models");
-        let features_a = matcher.extract(&a_downsampled.path).expect("extract a");
-        let features_b = matcher.extract(&b_downsampled.path).expect("extract b");
+        let extractor = FeatureExtractor::load(&extractor_path()).expect("load extractor");
+        let features_a = extractor.extract(&a_downsampled.path).expect("extract a");
+        let features_b = extractor.extract(&b_downsampled.path).expect("extract b");
+        drop(extractor); // mirrors pipeline.rs dropping it before matching starts
 
+        let matcher = PairMatcher::load(&matcher_path()).expect("load matcher");
         let matches = matcher.match_pair(&features_a, &features_b).expect("match_pair");
         assert!(matches.len() > 100, "two overlapping real photos should yield plenty of matches, got {}", matches.len());
     }

@@ -68,11 +68,15 @@ export interface InspectionResult {
 
 export type ScanStatus = "idle" | "scanning" | "done" | "error";
 
+/** Mirrors `StitchBackend` (`src-tauri/src/models/stitch_result.rs`). */
+export type StitchBackend = "onnx" | "orb";
+
 export interface StitchResult {
   geotiffPath: string;
   previewPath: string;
   /** MapLibre `image` source order: top-left, top-right, bottom-right, bottom-left. */
   previewCorners: [LonLat, LonLat, LonLat, LonLat];
+  backend: StitchBackend;
   photosUsed: number;
   photosSkipped: number;
   confidentPairs: number;

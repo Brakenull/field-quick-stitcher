@@ -1,6 +1,18 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::photo_meta::LonLat;
+
+/// Which feature-matching backend Quick Stitch should run with (spec section
+/// 6): the default ONNX (SuperPoint extractor + LightGlue matcher, DirectML-
+/// accelerated) path, or the CPU-only ORB path kept dormant-no-more in
+/// `core/stitching/features.rs`/`matching.rs` for machines without a usable
+/// GPU or where ONNX Runtime itself fails to load.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum StitchBackend {
+    Onnx,
+    Orb,
+}
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +25,7 @@ pub struct StitchResult {
     /// The preview image's 4 corners in MapLibre `image` source order:
     /// top-left, top-right, bottom-right, bottom-left.
     pub preview_corners: [LonLat; 4],
+    pub backend: StitchBackend,
     pub photos_used: usize,
     pub photos_skipped: usize,
     pub confident_pairs: usize,

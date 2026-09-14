@@ -9,6 +9,8 @@
 //! the (cheap, ROI-sized) accumulation into the shared canvas needs to run
 //! sequentially.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::Path;
 
 use opencv::core::{Mat, Rect, Scalar, Size, Vec3b, Vec3f, BORDER_CONSTANT, CV_32FC1, CV_32FC3, CV_64F, CV_8UC3};
@@ -142,6 +144,19 @@ pub fn compose<Pth: AsRef<Path> + Sync>(
         return Ok(None);
     }
 
+    // Every photo downsamples to (typically) the same handful of sizes -
+    // same camera, same aspect ratio - so `center_distance_weights` only
+    // actually depends on `source_size`. Building this cache up front
+    // (sequentially, cheap - almost always just one distinct size) means the
+    // parallel loop below looks a value up instead of re-deriving the
+    // identical weight map once per photo.
+    let mut weights_by_size: HashMap<(i32, i32), Mat> = HashMap::new();
+    for p in &placements {
+        if let Entry::Vacant(entry) = weights_by_size.entry(p.source_size) {
+            entry.insert(center_distance_weights(p.source_size.0, p.source_size.1)?);
+        }
+    }
+
     // The heaviest step, and the one that scales with photo count - so it
     // runs in parallel, one independent ROI-sized buffer pair per photo.
     let warped: Vec<Result<(Rect, Mat, Mat)>> = par_map_with_progress(
@@ -154,9 +169,9 @@ pub fn compose<Pth: AsRef<Path> + Sync>(
             let mut warped_img = Mat::default();
             imgproc::warp_perspective(&img, &mut warped_img, &pixel_to_roi, roi_size, imgproc::INTER_LINEAR, BORDER_CONSTANT, Scalar::all(0.0))?;
 
-            let weights = center_distance_weights(p.source_size.0, p.source_size.1)?;
+            let weights = &weights_by_size[&p.source_size];
             let mut warped_weights = Mat::default();
-            imgproc::warp_perspective(&weights, &mut warped_weights, &pixel_to_roi, roi_size, imgproc::INTER_LINEAR, BORDER_CONSTANT, Scalar::all(0.0))?;
+            imgproc::warp_perspective(weights, &mut warped_weights, &pixel_to_roi, roi_size, imgproc::INTER_LINEAR, BORDER_CONSTANT, Scalar::all(0.0))?;
 
             Ok((p.rect, warped_img, warped_weights))
         },
@@ -177,20 +192,28 @@ pub fn compose<Pth: AsRef<Path> + Sync>(
     Ok(Some(Mosaic { image, origin_east: bounds.min_e, origin_north: bounds.max_n, meters_per_pixel }))
 }
 
+/// Row-at-a-time (not pixel-at-a-time) so each row only pays for one bounds
+/// check through the OpenCV FFI boundary instead of one per pixel - measured
+/// as ~90% of `compose`'s wall time on a real 156-photo survey when this used
+/// `at_2d`/`at_2d_mut`, dwarfing even the (parallel, per-photo) warp step.
 fn accumulate(accum: &mut impl MatTrait, weight_sum: &mut impl MatTrait, warped: &impl MatTraitConst, weights: &impl MatTraitConst) -> Result<()> {
-    let (h, w) = (accum.rows(), accum.cols());
+    let h = accum.rows();
     for y in 0..h {
-        for x in 0..w {
-            let wt = *weights.at_2d::<f32>(y, x)?;
+        let weights_row: &[f32] = weights.at_row(y)?;
+        let warped_row: &[Vec3b] = warped.at_row(y)?;
+        let accum_row: &mut [Vec3f] = accum.at_row_mut(y)?;
+        let weight_sum_row: &mut [f32] = weight_sum.at_row_mut(y)?;
+
+        for x in 0..weights_row.len() {
+            let wt = weights_row[x];
             if wt <= 0.0 {
                 continue;
             }
-            let px = *warped.at_2d::<Vec3b>(y, x)?;
-            let acc = accum.at_2d_mut::<Vec3f>(y, x)?;
+            let px = warped_row[x];
             for c in 0..3 {
-                acc[c] += px[c] as f32 * wt;
+                accum_row[x][c] += px[c] as f32 * wt;
             }
-            *weight_sum.at_2d_mut::<f32>(y, x)? += wt;
+            weight_sum_row[x] += wt;
         }
     }
     Ok(())

@@ -7,7 +7,7 @@ import { LayerControl, type LayerVisibility } from "./components/LayerControl";
 import { FlightMap, type FlightMapHandle } from "./components/FlightMap";
 import { useFlightInspector } from "./hooks/useFlightInspector";
 import { useQuickStitch } from "./hooks/useQuickStitch";
-import type { StitchStage } from "./types/flight";
+import type { StitchBackend, StitchStage } from "./types/flight";
 import "./App.css";
 
 const STITCH_STAGE_ORDER: StitchStage[] = [
@@ -42,6 +42,7 @@ function App() {
   const [visibility, setVisibility] = useState<LayerVisibility>(DEFAULT_VISIBILITY);
   const [mosaicOpacity, setMosaicOpacity] = useState(0.85);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [stitchBackend, setStitchBackend] = useState<StitchBackend>("onnx");
   const mapRef = useRef<FlightMapHandle>(null);
 
   async function handleInspect(path: string) {
@@ -60,7 +61,7 @@ function App() {
       filters: [{ name: "GeoTIFF", extensions: ["tif", "tiff"] }],
     });
     if (!outputPath) return;
-    await stitchState.stitch(outputPath);
+    await stitchState.stitch(outputPath, stitchBackend);
   }
 
   async function handleExport(format: "json" | "pdf") {
@@ -117,6 +118,17 @@ function App() {
             />
 
             <div className="stitch-panel">
+              <label className="stitch-backend">
+                Backend
+                <select
+                  value={stitchBackend}
+                  onChange={(e) => setStitchBackend(e.target.value as StitchBackend)}
+                  disabled={stitchState.status === "stitching"}
+                >
+                  <option value="onnx">ONNX (SuperPoint + LightGlue, GPU)</option>
+                  <option value="orb">ORB (CPU fallback)</option>
+                </select>
+              </label>
               <button onClick={handleQuickStitch} disabled={stitchState.status === "stitching"}>
                 {stitchState.status === "stitching" ? "Stitching..." : "Quick Stitch"}
               </button>
@@ -136,8 +148,9 @@ function App() {
               )}
               {stitchState.status === "done" && stitchState.result && (
                 <p className="export-status">
-                  Stitched {stitchState.result.photosUsed} photos ({stitchState.result.confidentPairs} confident
-                  pairs) in {(stitchState.result.durationMs / 1000).toFixed(1)}s -&gt; {stitchState.result.geotiffPath}
+                  Stitched {stitchState.result.photosUsed} photos via {stitchState.result.backend.toUpperCase()} (
+                  {stitchState.result.confidentPairs} confident pairs) in{" "}
+                  {(stitchState.result.durationMs / 1000).toFixed(1)}s -&gt; {stitchState.result.geotiffPath}
                 </p>
               )}
             </div>

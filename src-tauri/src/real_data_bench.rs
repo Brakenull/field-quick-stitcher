@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::core::stitching::pipeline;
 use crate::core::{blur_detector, geometry, metadata_parser};
 use crate::models::photo_meta::PhotoMeta;
+use crate::models::stitch_result::StitchBackend;
 use crate::utils::thread_pool::par_map_with_progress;
 
 const REAL_DATA_DIR: &str = r"C:\Users\brake\Local\Cowork\search-test_images\Result\Jablunkov_Pass_Fortifications_CZ";
@@ -71,7 +72,7 @@ fn real_stitch_benchmark() {
     println!("=== Starting quick_stitch pipeline, output -> {} ===", output_path.display());
 
     let stitch_start = Instant::now();
-    let result = pipeline::run(with_footprint, &output_path, extractor_model_path, matcher_model_path, |progress| {
+    let result = pipeline::run(with_footprint, &output_path, StitchBackend::Onnx, extractor_model_path, matcher_model_path, |progress| {
         println!("{:?}: {}%", progress.stage, progress.percent)
     });
     let elapsed = stitch_start.elapsed();
