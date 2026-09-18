@@ -60,6 +60,13 @@
 //! its DirectML (GPU) session's VRAM/driver allocations - as soon as the
 //! DetectingFeatures stage finishes, instead of holding that GPU session
 //! open (idle) through the whole CPU-only MatchingPairs stage that follows.
+//!
+//! `FeatureExtractor::extract` also caps keypoints per photo at
+//! [`MAX_KEYPOINTS_PER_IMAGE`] by SuperPoint's own confidence score (see that
+//! constant's doc comment) - LightGlue's matching cost scales worse than
+//! linearly with keypoint count, so a densely/repetitively textured survey
+//! (quarries, gravel, rooftops) can otherwise turn a ~1 hour stitch into
+//! several hours with no visible warning, confirmed on two real surveys.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -97,6 +104,22 @@ pub struct PointMatch {
 /// before that (LightGlue's own scores range from near-0 for spurious pairs
 /// to ~1.0 for confident ones, unlike ORB's Hamming distance).
 const MIN_MATCH_SCORE: f32 = 0.2;
+
+/// Hard cap on keypoints kept per photo, by SuperPoint's own per-keypoint
+/// confidence (the `scores` output - see `cap_by_score`). LightGlue's
+/// cross-attention cost scales worse than linearly with keypoint count:
+/// measured on two real surveys, a densely/repetitively textured quarry site
+/// (`Wietrznia_Quarry_PL`) produced ~2.2x the keypoints per photo of a normal
+/// survey (`Jablunkov_Pass_Fortifications_CZ`, both via `real_data_bench.rs`),
+/// and its `match_pair` calls measured ~4.6x slower - close to the ~2.2^2 a
+/// quadratic cost would predict, and enough to turn a ~1 hour stitch into a
+/// 6+ hour one. `homography.rs`'s RANSAC only ever needs a few dozen good
+/// correspondences per pair, so this trades a bit of match density (dropping
+/// the least-confident keypoints first) for a matching-time cap that holds
+/// regardless of how texture-dense the terrain is. 2000 sits just under a
+/// typical/normal survey's own keypoint count, so it rarely truncates
+/// anything on non-adversarial terrain.
+const MAX_KEYPOINTS_PER_IMAGE: usize = 2000;
 
 /// Owns just the SuperPoint extractor's DirectML session - kept separate from
 /// `PairMatcher` so it can be dropped (freeing its GPU session) the moment
@@ -164,22 +187,49 @@ impl FeatureExtractor {
             tensor[[0, 0, y as usize, x as usize]] = p[0] as f32 / 255.0;
         }
 
-        let (keypoint_count, kp_data, desc_data) = {
+        let (keypoint_count, kp_data, desc_data, score_data) = {
             let mut session = self.session.lock().map_err(|_| "SuperPoint session lock poisoned".to_string())?;
             let input = TensorRef::from_array_view(&tensor).map_err(|e| e.to_string())?;
             let outputs = session.run(ort::inputs!["image" => input]).map_err(|e| e.to_string())?;
             let (kp_shape, kp_data) = outputs["keypoints"].try_extract_tensor::<i64>().map_err(|e| e.to_string())?;
             let (_, desc_data) = outputs["descriptors"].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
-            (kp_shape[1] as usize, kp_data.to_vec(), desc_data.to_vec())
+            let (_, score_data) = outputs["scores"].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
+            (kp_shape[1] as usize, kp_data.to_vec(), desc_data.to_vec(), score_data.to_vec())
         };
 
         let keypoints: Vec<Point2f> =
             (0..keypoint_count).map(|i| Point2f::new(kp_data[i * 2] as f32, kp_data[i * 2 + 1] as f32)).collect();
+        let (keypoints, desc_data, keypoint_count) = cap_by_score(keypoints, desc_data, &score_data, MAX_KEYPOINTS_PER_IMAGE);
+
         let normalized = normalize_keypoints(&keypoints, width, height);
         let descriptors = Array3::from_shape_vec((1, keypoint_count, 256), desc_data).map_err(|e| e.to_string())?;
 
         Ok(FeatureSet { keypoints, normalized, descriptors })
     }
+}
+
+/// Keeps only the `max_keypoints` highest-confidence keypoints (and their
+/// matching descriptor rows, kept in the same relative order as `scores`
+/// gives them - only the *set* kept matters, not the order), when the
+/// extractor found more than that. A no-op (returns everything unchanged)
+/// when `keypoints.len() <= max_keypoints` - see [`MAX_KEYPOINTS_PER_IMAGE`]
+/// for why this exists.
+fn cap_by_score(keypoints: Vec<Point2f>, descriptors: Vec<f32>, scores: &[f32], max_keypoints: usize) -> (Vec<Point2f>, Vec<f32>, usize) {
+    let n = keypoints.len();
+    if n <= max_keypoints {
+        return (keypoints, descriptors, n);
+    }
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_unstable_by(|&a, &b| scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal));
+    order.truncate(max_keypoints);
+
+    let kept_keypoints: Vec<Point2f> = order.iter().map(|&i| keypoints[i]).collect();
+    let mut kept_descriptors = Vec::with_capacity(max_keypoints * 256);
+    for &i in &order {
+        kept_descriptors.extend_from_slice(&descriptors[i * 256..(i + 1) * 256]);
+    }
+    (kept_keypoints, kept_descriptors, max_keypoints)
 }
 
 impl PairMatcher {
@@ -235,6 +285,33 @@ impl PairMatcher {
 mod tests {
     use super::*;
     use crate::core::stitching::downsample;
+
+    #[test]
+    fn cap_by_score_keeps_the_highest_scoring_keypoints() {
+        let keypoints = vec![Point2f::new(0.0, 0.0), Point2f::new(1.0, 1.0), Point2f::new(2.0, 2.0), Point2f::new(3.0, 3.0)];
+        let descriptors: Vec<f32> = (0..4).flat_map(|i| vec![i as f32; 256]).collect();
+        let scores = [0.1, 0.9, 0.3, 0.5]; // index 1 best, then 3, then 2, then 0
+
+        let (kept_kps, kept_desc, kept_n) = cap_by_score(keypoints, descriptors, &scores, 2);
+
+        assert_eq!(kept_n, 2);
+        assert_eq!(kept_kps, vec![Point2f::new(1.0, 1.0), Point2f::new(3.0, 3.0)]);
+        // Descriptor rows must stay aligned with their keypoint after reordering.
+        assert_eq!(kept_desc, [vec![1.0f32; 256], vec![3.0f32; 256]].concat());
+    }
+
+    #[test]
+    fn cap_by_score_is_a_no_op_under_the_cap() {
+        let keypoints = vec![Point2f::new(0.0, 0.0), Point2f::new(1.0, 1.0)];
+        let descriptors: Vec<f32> = vec![0.0; 512];
+        let scores = [0.1, 0.9];
+
+        let (kept_kps, kept_desc, kept_n) = cap_by_score(keypoints.clone(), descriptors.clone(), &scores, 10);
+
+        assert_eq!(kept_n, 2);
+        assert_eq!(kept_kps, keypoints);
+        assert_eq!(kept_desc, descriptors);
+    }
 
     fn extractor_path() -> std::path::PathBuf {
         std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint.onnx"))
