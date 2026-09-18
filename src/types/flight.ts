@@ -5,9 +5,15 @@ export type LonLat = [number, number];
 export interface PhotoMeta {
   fileName: string;
   path: string;
-  lat: number;
-  lon: number;
+  /** `null` when the photo has no usable GPS EXIF (a GPS dropout) - it's still
+   * kept in `photos` rather than dropped, so check `warnings` for
+   * `"missing_gps"` or just this being `null` to find such photos. */
+  lat: number | null;
+  lon: number | null;
   relativeAltitude: number | null;
+  /** Not currently used by any UI - captured for a future DEM-based terrain
+   * correction (see `.claude/docs/1-inspect.md` section 7). */
+  absoluteAltitude: number | null;
   yawDeg: number | null;
   focalMm: number | null;
   sensorWidthMm: number | null;

@@ -114,6 +114,7 @@ function App() {
             <AlertPanel
               gaps={result.gaps}
               blurAlerts={result.blurAlerts}
+              missingGpsFiles={result.photos.filter((p) => p.lat == null || p.lon == null).map((p) => p.fileName)}
               onFocusPoint={(lat, lon) => mapRef.current?.flyTo(lat, lon)}
             />
 

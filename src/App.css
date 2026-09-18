@@ -303,6 +303,14 @@ body,
   background: #273449;
 }
 
+.alert-item--static {
+  cursor: default;
+}
+
+.alert-item--static:hover {
+  background: #1f2937;
+}
+
 .alert-item__coords {
   font-size: 11px;
   color: #94a3b8;

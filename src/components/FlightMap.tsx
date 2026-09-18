@@ -95,6 +95,7 @@ function boundsOf(result: InspectionResult): maplibregl.LngLatBoundsLike | null 
   let maxLat = -Infinity;
   let touched = false;
   for (const photo of result.photos) {
+    if (photo.lat == null || photo.lon == null) continue; // GPS dropout - not placeable
     touched = true;
     minLon = Math.min(minLon, photo.lon);
     maxLon = Math.max(maxLon, photo.lon);

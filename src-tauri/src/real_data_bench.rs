@@ -20,12 +20,12 @@ fn parse_one(path: PathBuf) -> PhotoMeta {
     meta.is_blurry = blur.is_blurry;
     meta.blur_score = blur.score;
 
-    if let (Some(rel_alt), Some(yaw), Some(focal), Some(sw), Some(sh)) =
-        (meta.relative_altitude, meta.yaw_deg, meta.focal_mm, meta.sensor_width_mm, meta.sensor_height_mm)
+    if let (Some(lat), Some(lon), Some(rel_alt), Some(yaw), Some(focal), Some(sw), Some(sh)) =
+        (meta.lat, meta.lon, meta.relative_altitude, meta.yaw_deg, meta.focal_mm, meta.sensor_width_mm, meta.sensor_height_mm)
     {
         meta.footprint = geometry::compute_footprint(geometry::FootprintInput {
-            lat: meta.lat,
-            lon: meta.lon,
+            lat,
+            lon,
             relative_altitude_m: rel_alt,
             focal_mm: focal,
             sensor_width_mm: sw,
@@ -56,7 +56,7 @@ fn real_stitch_benchmark() {
 
     for p in photos.iter().take(3) {
         println!(
-            "sample: {} lat={:.6} lon={:.6} alt={:?} yaw={:?} focal={:?} sensor=({:?},{:?}) footprint={} blurry={} warnings={:?}",
+            "sample: {} lat={:?} lon={:?} alt={:?} yaw={:?} focal={:?} sensor=({:?},{:?}) footprint={} blurry={} warnings={:?}",
             p.file_name, p.lat, p.lon, p.relative_altitude, p.yaw_deg, p.focal_mm, p.sensor_width_mm, p.sensor_height_mm,
             p.footprint.is_some(), p.is_blurry, p.warnings
         );

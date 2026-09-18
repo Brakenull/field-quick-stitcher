@@ -29,7 +29,9 @@ fn parse_one(path: PathBuf) -> PhotoMeta {
     meta.is_blurry = blur.is_blurry;
     meta.blur_score = blur.score;
 
-    if let (Some(relative_altitude_m), Some(yaw_deg), Some(focal_mm), Some(sensor_width_mm), Some(sensor_height_mm)) = (
+    if let (Some(lat), Some(lon), Some(relative_altitude_m), Some(yaw_deg), Some(focal_mm), Some(sensor_width_mm), Some(sensor_height_mm)) = (
+        meta.lat,
+        meta.lon,
         meta.relative_altitude,
         meta.yaw_deg,
         meta.focal_mm,
@@ -37,8 +39,8 @@ fn parse_one(path: PathBuf) -> PhotoMeta {
         meta.sensor_height_mm,
     ) {
         meta.footprint = geometry::compute_footprint(geometry::FootprintInput {
-            lat: meta.lat,
-            lon: meta.lon,
+            lat,
+            lon,
             relative_altitude_m,
             focal_mm,
             sensor_width_mm,
@@ -81,11 +83,14 @@ pub async fn inspect_directory(
     .await
     .map_err(|e| e.to_string())?;
 
-    photos.retain(|p| !p.warnings.iter().any(|w| w == "missing_gps"));
-    if photos.is_empty() {
+    // Photos lacking GPS are kept (not dropped) so a mid-flight GPS dropout is
+    // visible in `photos`/`Metrics::photos_with_gps` rather than silently
+    // vanishing - but a scan where *nothing* has GPS still can't produce a
+    // useful flight path/heatmap, so that case is still an error.
+    if !photos.iter().any(|p| p.lat.is_some() && p.lon.is_some()) {
         return Err("None of the photos had usable GPS metadata.".to_string());
     }
-    photos.sort_by(|a, b| a.capture_time.cmp(&b.capture_time).then(a.file_name.cmp(&b.file_name)));
+    photos.sort_by(|a, b| a.sort_key.cmp(&b.sort_key).then(a.file_name.cmp(&b.file_name)));
 
     let footprints: Vec<_> = photos.iter().filter_map(|p| p.footprint.clone()).collect();
     let overlap = overlap_engine::analyze(&footprints, CELL_SIZE_M);
@@ -94,11 +99,13 @@ pub async fn inspect_directory(
     let blur_alerts: Vec<BlurAlert> = photos
         .iter()
         .filter(|p| p.is_blurry)
-        .map(|p| BlurAlert {
-            file_name: p.file_name.clone(),
-            lat: p.lat,
-            lon: p.lon,
-            blur_score: p.blur_score.unwrap_or(0.0),
+        .filter_map(|p| {
+            Some(BlurAlert {
+                file_name: p.file_name.clone(),
+                lat: p.lat?,
+                lon: p.lon?,
+                blur_score: p.blur_score.unwrap_or(0.0),
+            })
         })
         .collect();
 
@@ -111,8 +118,11 @@ pub async fn inspect_directory(
 
     let metrics = Metrics {
         total_photos: photos.len(),
-        photos_with_gps: photos.len(),
-        blurry_count: blur_alerts.len(),
+        photos_with_gps: photos.iter().filter(|p| p.lat.is_some() && p.lon.is_some()).count(),
+        // Counts every blurry photo, including any without GPS - `blur_alerts`
+        // (map pins) can only plot the ones with coordinates, but the count
+        // shouldn't understate how many blurry shots the scan actually found.
+        blurry_count: photos.iter().filter(|p| p.is_blurry).count(),
         gap_count: overlap.gaps.len(),
         avg_altitude_m,
         coverage_area_m2: overlap.coverage_area_m2,
@@ -132,21 +142,27 @@ pub async fn inspect_directory(
     Ok(result)
 }
 
+/// Builds the flight-path line and per-photo point layer from whichever
+/// photos actually have coordinates - a photo with a GPS dropout (`lat`/`lon`
+/// both `None`) still exists in `photos` (see `PhotoMeta::lat`) but simply
+/// can't be placed on the map, so it's skipped here rather than plotted at a
+/// placeholder position.
 fn build_flight_path(photos: &[PhotoMeta]) -> Vec<GeoFeature> {
-    if photos.is_empty() {
+    let located: Vec<&PhotoMeta> = photos.iter().filter(|p| p.lat.is_some() && p.lon.is_some()).collect();
+    if located.is_empty() {
         return Vec::new();
     }
-    let mut features = Vec::with_capacity(photos.len() + 1);
-    let coords: Vec<_> = photos.iter().map(|p| [p.lon, p.lat]).collect();
+    let mut features = Vec::with_capacity(located.len() + 1);
+    let coords: Vec<_> = located.iter().map(|p| [p.lon.unwrap(), p.lat.unwrap()]).collect();
     features.push(GeoFeature {
         feature_type: "Feature",
         geometry: GeoGeometry::LineString(coords),
         properties: serde_json::json!({ "kind": "flightPath" }),
     });
-    for p in photos {
+    for p in located {
         features.push(GeoFeature {
             feature_type: "Feature",
-            geometry: GeoGeometry::Point([p.lon, p.lat]),
+            geometry: GeoGeometry::Point([p.lon.unwrap(), p.lat.unwrap()]),
             properties: serde_json::json!({
                 "kind": "photoPoint",
                 "fileName": p.file_name,

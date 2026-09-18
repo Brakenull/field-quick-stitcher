@@ -27,6 +27,8 @@ struct FixtureSpec {
     yaw_deg: f64,
     capture_time: &'static str,
     sharp_thumbnail: bool,
+    /// `false` omits the GPS EXIF tags entirely, simulating a GPS dropout.
+    has_gps: bool,
 }
 
 fn decimal_to_dms(decimal: f64) -> [Rational; 3] {
@@ -65,16 +67,18 @@ fn build_fixture_jpeg(spec: &FixtureSpec) -> Vec<u8> {
     let thumb = encode_jpeg(96, 72, spec.sharp_thumbnail);
     let base = encode_jpeg(16, 16, true);
 
-    let lat_ref = if spec.lat >= 0.0 { b"N".to_vec() } else { b"S".to_vec() };
-    let lon_ref = if spec.lon >= 0.0 { b"E".to_vec() } else { b"W".to_vec() };
-    let lat_dms = decimal_to_dms(spec.lat);
-    let lon_dms = decimal_to_dms(spec.lon);
-
-    let fields = vec![
-        Field { tag: Tag::GPSLatitudeRef, ifd_num: In::PRIMARY, value: Value::Ascii(vec![lat_ref]) },
-        Field { tag: Tag::GPSLatitude, ifd_num: In::PRIMARY, value: Value::Rational(lat_dms.to_vec()) },
-        Field { tag: Tag::GPSLongitudeRef, ifd_num: In::PRIMARY, value: Value::Ascii(vec![lon_ref]) },
-        Field { tag: Tag::GPSLongitude, ifd_num: In::PRIMARY, value: Value::Rational(lon_dms.to_vec()) },
+    let mut fields = Vec::new();
+    if spec.has_gps {
+        let lat_ref = if spec.lat >= 0.0 { b"N".to_vec() } else { b"S".to_vec() };
+        let lon_ref = if spec.lon >= 0.0 { b"E".to_vec() } else { b"W".to_vec() };
+        let lat_dms = decimal_to_dms(spec.lat);
+        let lon_dms = decimal_to_dms(spec.lon);
+        fields.push(Field { tag: Tag::GPSLatitudeRef, ifd_num: In::PRIMARY, value: Value::Ascii(vec![lat_ref]) });
+        fields.push(Field { tag: Tag::GPSLatitude, ifd_num: In::PRIMARY, value: Value::Rational(lat_dms.to_vec()) });
+        fields.push(Field { tag: Tag::GPSLongitudeRef, ifd_num: In::PRIMARY, value: Value::Ascii(vec![lon_ref]) });
+        fields.push(Field { tag: Tag::GPSLongitude, ifd_num: In::PRIMARY, value: Value::Rational(lon_dms.to_vec()) });
+    }
+    fields.extend(vec![
         Field {
             tag: Tag::FocalLength,
             ifd_num: In::PRIMARY,
@@ -97,7 +101,7 @@ fn build_fixture_jpeg(spec: &FixtureSpec) -> Vec<u8> {
             ifd_num: In::PRIMARY,
             value: Value::Ascii(vec![spec.capture_time.as_bytes().to_vec()]),
         },
-    ];
+    ]);
 
     let mut writer = ExifWriter::new();
     for f in &fields {
@@ -157,12 +161,12 @@ fn parse_one_for_test(path: &Path) -> crate::models::photo_meta::PhotoMeta {
     meta.is_blurry = blur.is_blurry;
     meta.blur_score = blur.score;
 
-    if let (Some(rel_alt), Some(yaw), Some(focal), Some(sw), Some(sh)) =
-        (meta.relative_altitude, meta.yaw_deg, meta.focal_mm, meta.sensor_width_mm, meta.sensor_height_mm)
+    if let (Some(lat), Some(lon), Some(rel_alt), Some(yaw), Some(focal), Some(sw), Some(sh)) =
+        (meta.lat, meta.lon, meta.relative_altitude, meta.yaw_deg, meta.focal_mm, meta.sensor_width_mm, meta.sensor_height_mm)
     {
         meta.footprint = geometry::compute_footprint(geometry::FootprintInput {
-            lat: meta.lat,
-            lon: meta.lon,
+            lat,
+            lon,
             relative_altitude_m: rel_alt,
             focal_mm: focal,
             sensor_width_mm: sw,
@@ -191,6 +195,7 @@ fn full_pipeline_on_synthetic_flight() {
                 yaw_deg: 0.0,
                 capture_time: Box::leak(format!("2024:01:01 10:00:{i:02}").into_boxed_str()),
                 sharp_thumbnail: i != 1, // make the 2nd photo blurry
+                has_gps: true,
             });
             i += 1;
         }
@@ -203,6 +208,7 @@ fn full_pipeline_on_synthetic_flight() {
         yaw_deg: 45.0,
         capture_time: "2024:01:01 10:01:00",
         sharp_thumbnail: true,
+        has_gps: true,
     });
 
     let dir = write_fixture_dir(&specs);
@@ -215,8 +221,10 @@ fn full_pipeline_on_synthetic_flight() {
     let photos: Vec<_> = paths.iter().map(|p| parse_one_for_test(p)).collect();
 
     for p in &photos {
-        assert!(p.lat > 9.0 && p.lat < 11.0, "lat parsed: {}", p.lat);
-        assert!(p.lon > 105.0 && p.lon < 107.0, "lon parsed: {}", p.lon);
+        let lat = p.lat.expect("fixture always has GPS");
+        let lon = p.lon.expect("fixture always has GPS");
+        assert!(lat > 9.0 && lat < 11.0, "lat parsed: {lat}");
+        assert!(lon > 105.0 && lon < 107.0, "lon parsed: {lon}");
         assert_eq!(p.relative_altitude, Some(80.0));
         assert!(p.warnings.iter().all(|w| w != "missing_gps"));
         assert!((p.sensor_width_mm.unwrap() - 13.2).abs() < 1e-6, "sensor width via 35mm-equiv calc");
@@ -238,4 +246,35 @@ fn full_pipeline_on_synthetic_flight() {
         .unwrap();
     assert!(max_overlap >= 3, "tightly packed grid should overlap in the middle, got max {max_overlap}");
     assert!(!overlap.gaps.is_empty(), "the isolated far-away photo should show up as a low-coverage gap");
+}
+
+/// A GPS dropout (no GPSLatitude/GPSLongitude tags at all) should still parse
+/// to a usable `PhotoMeta` - `lat`/`lon` are `None`, the `missing_gps`
+/// warning is set, and no footprint is computed - rather than the parse step
+/// itself failing. `inspect_directory` (not exercised here - see this file's
+/// module doc comment) is what decides to keep such a photo in the result;
+/// this test covers the parsing foundation that decision depends on.
+#[test]
+fn photo_without_gps_parses_with_none_coordinates_and_no_footprint() {
+    let spec = FixtureSpec {
+        file_name: "no_gps.jpg",
+        lat: 10.0,
+        lon: 106.0,
+        relative_altitude_m: 80.0,
+        yaw_deg: 0.0,
+        capture_time: "2024:01:01 10:00:00",
+        sharp_thumbnail: true,
+        has_gps: false,
+    };
+    let dir = write_fixture_dir(&[spec]);
+    let path = fs::read_dir(dir.path()).unwrap().next().unwrap().unwrap().path();
+
+    let photo = parse_one_for_test(&path);
+    assert_eq!(photo.lat, None);
+    assert_eq!(photo.lon, None);
+    assert!(photo.warnings.iter().any(|w| w == "missing_gps"));
+    assert!(photo.footprint.is_none(), "a photo with no GPS can't have a footprint");
+    // Everything else should still parse normally - a GPS dropout shouldn't
+    // corrupt or block the rest of the metadata read.
+    assert_eq!(photo.relative_altitude, Some(80.0));
 }

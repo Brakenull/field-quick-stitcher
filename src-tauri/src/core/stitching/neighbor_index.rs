@@ -61,7 +61,11 @@ pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64) -> Vec<(usize, u
         return Vec::new();
     }
 
-    let mid_lat = photos.iter().map(|p| p.lat).sum::<f64>() / photos.len() as f64;
+    // Every photo reaching this function already has a computed footprint
+    // (the pipeline only calls it on that subset - see `pipeline.rs`), which
+    // itself requires lat/lon to have been `Some` when the footprint was
+    // built - so unwrapping here is safe, not a guess.
+    let mid_lat = photos.iter().map(|p| p.lat.expect("footprint-bearing photo has GPS")).sum::<f64>() / photos.len() as f64;
     let mid_lat_rad = mid_lat.to_radians();
     let m_per_deg_lat = EARTH_RADIUS_M.to_radians();
     let m_per_deg_lon = EARTH_RADIUS_M.to_radians() * mid_lat_rad.cos();
@@ -74,7 +78,11 @@ pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64) -> Vec<(usize, u
         photos
             .iter()
             .enumerate()
-            .map(|(idx, p)| IndexedCenter { idx, lon: p.lon, lat: p.lat })
+            .map(|(idx, p)| IndexedCenter {
+                idx,
+                lon: p.lon.expect("footprint-bearing photo has GPS"),
+                lat: p.lat.expect("footprint-bearing photo has GPS"),
+            })
             .collect(),
     );
 
@@ -111,7 +119,10 @@ pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64) -> Vec<(usize, u
 /// radius-only when footprint data isn't available.
 fn passes_overlap_check(a: &PhotoMeta, b: &PhotoMeta) -> bool {
     match (&a.footprint, &b.footprint) {
-        (Some(fa), Some(fb)) => overlap_fraction(fa, fb, a.lat, a.lon) > MIN_OVERLAP_FRACTION,
+        // A footprint can't exist without lat/lon (see `commands::inspect::parse_one`).
+        (Some(fa), Some(fb)) => {
+            overlap_fraction(fa, fb, a.lat.expect("footprint implies GPS"), a.lon.expect("footprint implies GPS")) > MIN_OVERLAP_FRACTION
+        }
         _ => true,
     }
 }
@@ -212,9 +223,10 @@ mod tests {
         PhotoMeta {
             file_name: String::new(),
             path: String::new(),
-            lat,
-            lon,
+            lat: Some(lat),
+            lon: Some(lon),
             relative_altitude: Some(80.0),
+            absolute_altitude: None,
             yaw_deg: Some(0.0),
             focal_mm: Some(8.8),
             sensor_width_mm: Some(13.2),
@@ -223,6 +235,7 @@ mod tests {
             image_height_px: Some(3648),
             footprint: None,
             capture_time: None,
+            sort_key: crate::models::photo_meta::CaptureOrderKey::Unresolved,
             is_blurry: false,
             blur_score: None,
             warnings: Vec::new(),

@@ -25,6 +25,7 @@ serde_json = "1"
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-notification = "2.4.0"
 kamadak-exif = "0.6"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 rayon = "1"
 rstar = "0.12"

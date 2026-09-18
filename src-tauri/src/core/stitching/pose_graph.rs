@@ -107,12 +107,15 @@ fn to_local_meters(lat: f64, lon: f64, origin: (f64, f64)) -> (f64, f64) {
 }
 
 /// A shared local-meters origin for a set of photos (their centroid), so every
-/// photo's pose lands in one consistent world frame.
+/// photo's pose lands in one consistent world frame. Every caller in this
+/// pipeline only ever passes photos that already have a computed footprint
+/// (see `pipeline.rs`), which itself requires lat/lon to be `Some` - so
+/// unwrapping here reflects an established invariant, not a guess.
 pub fn world_origin(photos: &[PhotoMeta]) -> (f64, f64) {
     let n = (photos.len().max(1)) as f64;
     (
-        photos.iter().map(|p| p.lat).sum::<f64>() / n,
-        photos.iter().map(|p| p.lon).sum::<f64>() / n,
+        photos.iter().map(|p| p.lat.expect("footprint-bearing photo has GPS")).sum::<f64>() / n,
+        photos.iter().map(|p| p.lon.expect("footprint-bearing photo has GPS")).sum::<f64>() / n,
     )
 }
 
@@ -145,7 +148,7 @@ fn similarity_params(photo: &PhotoMeta, image_width_px: f64, image_height_px: f6
 
     let scale = (w_m / image_width_px + h_m / image_height_px) / 2.0;
     let theta = photo.yaw_deg?.to_radians();
-    let (tx, ty) = to_local_meters(photo.lat, photo.lon, origin);
+    let (tx, ty) = to_local_meters(photo.lat?, photo.lon?, origin);
     Some(SimilarityParams { scale, cx: image_width_px / 2.0, cy: image_height_px / 2.0, tx, ty, theta })
 }
 
@@ -338,9 +341,10 @@ mod tests {
         PhotoMeta {
             file_name: String::new(),
             path: String::new(),
-            lat,
-            lon,
+            lat: Some(lat),
+            lon: Some(lon),
             relative_altitude: Some(80.0),
+            absolute_altitude: None,
             yaw_deg: Some(yaw_deg),
             focal_mm: Some(8.8),
             sensor_width_mm: Some(13.2),
@@ -349,6 +353,7 @@ mod tests {
             image_height_px: Some(3648),
             footprint: None,
             capture_time: None,
+            sort_key: crate::models::photo_meta::CaptureOrderKey::Unresolved,
             is_blurry: false,
             blur_score: None,
             warnings: Vec::new(),

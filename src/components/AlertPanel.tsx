@@ -3,10 +3,13 @@ import type { BlurAlert, GapAlert } from "../types/flight";
 interface AlertPanelProps {
   gaps: GapAlert[];
   blurAlerts: BlurAlert[];
+  /** File names of photos with no usable GPS EXIF (a GPS dropout) - these
+   * can't be plotted (no coordinates), so they're listed by name only. */
+  missingGpsFiles: string[];
   onFocusPoint: (lat: number, lon: number) => void;
 }
 
-export function AlertPanel({ gaps, blurAlerts, onFocusPoint }: AlertPanelProps) {
+export function AlertPanel({ gaps, blurAlerts, missingGpsFiles, onFocusPoint }: AlertPanelProps) {
   return (
     <div className="alert-panel">
       <section>
@@ -54,6 +57,21 @@ export function AlertPanel({ gaps, blurAlerts, onFocusPoint }: AlertPanelProps) 
           </ul>
         )}
       </section>
+
+      {missingGpsFiles.length > 0 && (
+        <section>
+          <h3>
+            Missing GPS <span className="badge badge--yellow">{missingGpsFiles.length}</span>
+          </h3>
+          <ul>
+            {missingGpsFiles.map((fileName) => (
+              <li key={fileName}>
+                <span className="alert-item alert-item--static">{fileName}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
