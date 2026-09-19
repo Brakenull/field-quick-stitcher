@@ -1,10 +1,16 @@
 //! GPS-guided neighbor lookup: restricts feature matching to photo pairs whose
 //! ground footprints are close enough to plausibly overlap, instead of the
-//! O(N^2) all-pairs comparison a naive stitcher would do. Two-stage filter
-//! matching the spec's two descriptions of this step: a cheap R-tree distance
-//! radius first (section 2b: `R ≈ W_ground`, keeps this sub-O(N^2)), then an
-//! exact footprint-polygon overlap-area check (section 6.1.b: >30% overlap)
-//! on just the surviving candidates.
+//! O(N^2) all-pairs comparison a naive stitcher would do. Three-stage filter:
+//! a cheap R-tree distance radius first (spec section 2b: `R ≈ W_ground`,
+//! keeps this sub-O(N^2)), an exact footprint-polygon overlap-area check
+//! (section 6.1.b: >30% overlap) on just the surviving candidates, then a
+//! per-photo top-K cap (see [`MAX_NEIGHBORS_PER_PHOTO`]) not in the spec but
+//! needed in practice - a real dense-grid ("cross-hatch") survey with high
+//! front+side overlap pushed a photo's neighbor count past 80 (172 photos,
+//! 7,210 pairs, median 85/photo), and at ~1.8-2s/pair serialized through one
+//! CPU matcher session (`onnx_matcher.rs`), that's ~3.7 hours in the
+//! MatchingPairs stage alone for what pose-graph alignment only needed a
+//! handful of strong edges per photo to solve just as well.
 
 use std::collections::HashSet;
 
@@ -17,6 +23,15 @@ const EARTH_RADIUS_M: f64 = 6_378_137.0;
 /// Minimum footprint-overlap fraction (of the smaller photo's area) to treat
 /// two photos as neighbors worth matching, per spec section 6.1.b.
 const MIN_OVERLAP_FRACTION: f64 = 0.3;
+
+/// Max neighbors kept per photo, ranked by overlap fraction, after the
+/// >30% threshold above - see the module doc comment for why this exists.
+/// Pose-graph alignment (`pose_graph.rs`) needs enough edges for
+/// connectivity and a bit of redundancy, not an edge for literally every
+/// pair above the overlap threshold; 10 comfortably covers a normal
+/// single-pass strip survey's handful of along-track + cross-track
+/// neighbors while still bounding a dense-grid survey's matching cost.
+const MAX_NEIGHBORS_PER_PHOTO: usize = 10;
 
 struct IndexedCenter {
     idx: usize,
@@ -105,26 +120,55 @@ pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64) -> Vec<(usize, u
         }
     }
 
-    let mut result: Vec<_> = pairs
+    let scored: Vec<(usize, usize, f64)> = pairs
         .into_iter()
-        .filter(|&(i, j)| passes_overlap_check(&photos[i], &photos[j]))
+        .filter_map(|(i, j)| {
+            let score = overlap_score(&photos[i], &photos[j]);
+            (score > MIN_OVERLAP_FRACTION).then_some((i, j, score))
+        })
         .collect();
+
+    let mut result: Vec<_> = cap_neighbors_per_photo(&scored, photos.len(), MAX_NEIGHBORS_PER_PHOTO).into_iter().collect();
     result.sort_unstable();
     result
 }
 
-/// `true` unless both photos have a footprint AND that footprint's overlap
-/// fraction falls below the threshold - i.e. this only ever *rejects* pairs,
-/// never adds ones the radius check missed, and gracefully degrades to
-/// radius-only when footprint data isn't available.
-fn passes_overlap_check(a: &PhotoMeta, b: &PhotoMeta) -> bool {
+/// The overlap-fraction ranking score for a pair: the real footprint overlap
+/// fraction when both photos have one, or `f64::INFINITY` when either
+/// doesn't - so a pair this can't actually measure always passes the
+/// threshold and always wins its spot in the top-K cap below, gracefully
+/// degrading to radius-only exactly like the check this replaced.
+fn overlap_score(a: &PhotoMeta, b: &PhotoMeta) -> f64 {
     match (&a.footprint, &b.footprint) {
         // A footprint can't exist without lat/lon (see `commands::inspect::parse_one`).
-        (Some(fa), Some(fb)) => {
-            overlap_fraction(fa, fb, a.lat.expect("footprint implies GPS"), a.lon.expect("footprint implies GPS")) > MIN_OVERLAP_FRACTION
-        }
-        _ => true,
+        (Some(fa), Some(fb)) => overlap_fraction(fa, fb, a.lat.expect("footprint implies GPS"), a.lon.expect("footprint implies GPS")),
+        _ => f64::INFINITY,
     }
+}
+
+/// Keeps a pair only if it's among either endpoint's `max_neighbors`
+/// strongest-scoring overlaps - a union, not an intersection, so a photo's
+/// own best neighbor is never dropped just because that neighbor has enough
+/// *other* strong overlaps to not reciprocate. Bounds each photo's own
+/// candidate list to `max_neighbors`, but a given photo can still end up
+/// with more than that many kept pairs if other photos rank it highly - the
+/// goal is capping the worst-case blowup (see module doc comment), not
+/// enforcing an exact per-photo edge count.
+fn cap_neighbors_per_photo(scored: &[(usize, usize, f64)], photo_count: usize, max_neighbors: usize) -> HashSet<(usize, usize)> {
+    let mut per_photo: Vec<Vec<(f64, usize)>> = vec![Vec::new(); photo_count];
+    for &(i, j, score) in scored {
+        per_photo[i].push((score, j));
+        per_photo[j].push((score, i));
+    }
+
+    let mut kept = HashSet::new();
+    for (idx, neighbors) in per_photo.iter_mut().enumerate() {
+        neighbors.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        for &(_, other) in neighbors.iter().take(max_neighbors) {
+            kept.insert(if idx < other { (idx, other) } else { (other, idx) });
+        }
+    }
+    kept
 }
 
 /// Fraction of the smaller footprint's area that the two footprints overlap,
@@ -330,5 +374,56 @@ mod tests {
         let radius = typical_radius_m(&photos);
         let pairs = find_neighbor_pairs(&photos, radius);
         assert_eq!(pairs, vec![(0, 1)]);
+    }
+
+    #[test]
+    fn cap_neighbors_per_photo_keeps_a_pair_either_endpoint_ranks_highly() {
+        // Photo 0's own top-2 are 1 and 2 (0.9, 0.8), ranking 3 (0.7) out -
+        // but photo 3's own top-2 are 0 (0.7) and 2 (0.95), so it reciprocates.
+        let scored = vec![(0, 1, 0.9), (0, 2, 0.8), (0, 3, 0.7), (2, 3, 0.95)];
+        let kept = cap_neighbors_per_photo(&scored, 4, 2);
+        assert!(kept.contains(&(0, 1)));
+        assert!(kept.contains(&(0, 2)));
+        assert!(kept.contains(&(0, 3)), "photo 3 should reciprocate even though photo 0 ranked it 3rd");
+        assert!(kept.contains(&(2, 3)));
+    }
+
+    #[test]
+    fn cap_neighbors_per_photo_drops_a_pair_neither_endpoint_ranks_highly() {
+        // Photo 0 has 3 partners stronger than 4; photo 4 has 2 partners
+        // stronger than 0. With max_neighbors=2, neither side keeps (0, 4).
+        let scored = vec![(0, 1, 0.9), (0, 2, 0.85), (0, 3, 0.8), (0, 4, 0.3), (4, 5, 0.95), (4, 6, 0.9)];
+        let kept = cap_neighbors_per_photo(&scored, 7, 2);
+        assert!(!kept.contains(&(0, 4)));
+        assert!(kept.contains(&(0, 1)));
+        assert!(kept.contains(&(4, 5)));
+    }
+
+    #[test]
+    fn find_neighbor_pairs_bounds_a_dense_grid_survey() {
+        // 5x5 grid, ~20m spacing, every photo overlapping most others within
+        // the radius (mirrors the real dense "cross-hatch" survey that
+        // motivated the cap: median 85 neighbors/photo, unbounded). Without
+        // the cap this produces a near-complete graph; with it, no photo
+        // should end up with a lot more than MAX_NEIGHBORS_PER_PHOTO edges.
+        let mut photos = Vec::new();
+        for row in 0..5 {
+            for col in 0..5 {
+                let lat = 10.0 + row as f64 * 0.00014; // ~15.5m spacing
+                let lon = 106.0 + col as f64 * 0.00014;
+                photos.push(photo_with_computed_footprint(lat, lon, 0.0));
+            }
+        }
+
+        let radius = typical_radius_m(&photos);
+        let pairs = find_neighbor_pairs(&photos, radius);
+
+        let mut counts = vec![0usize; photos.len()];
+        for &(i, j) in &pairs {
+            counts[i] += 1;
+            counts[j] += 1;
+        }
+        let max_count = counts.iter().copied().max().unwrap_or(0);
+        assert!(max_count <= MAX_NEIGHBORS_PER_PHOTO * 2, "expected the cap to bound per-photo neighbor count, got {max_count}");
     }
 }
