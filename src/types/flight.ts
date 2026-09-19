@@ -77,12 +77,25 @@ export type ScanStatus = "idle" | "scanning" | "done" | "error";
 /** Mirrors `StitchBackend` (`src-tauri/src/models/stitch_result.rs`). */
 export type StitchBackend = "onnx" | "orb";
 
+/**
+ * Mirrors `NeighborCap` (`src-tauri/src/models/stitch_result.rs`). "capped"
+ * bounds Matching Pairs runtime by limiting each photo to its strongest ~10
+ * overlapping neighbors (roughly photo-count-only runtime, independent of
+ * how much the survey's flight lines overlap themselves) at the cost of
+ * dropping some pose-graph edge redundancy; "uncapped" matches every pair
+ * above the overlap threshold for maximum pose-graph robustness, at the
+ * cost of runtime that scales with overlap density - confirmed 5-8x more
+ * pairs, and hours instead of tens of minutes, on real dense surveys.
+ */
+export type NeighborCap = "capped" | "uncapped";
+
 export interface StitchResult {
   geotiffPath: string;
   previewPath: string;
   /** MapLibre `image` source order: top-left, top-right, bottom-right, bottom-left. */
   previewCorners: [LonLat, LonLat, LonLat, LonLat];
   backend: StitchBackend;
+  neighborCap: NeighborCap;
   photosUsed: number;
   photosSkipped: number;
   confidentPairs: number;

@@ -13,7 +13,7 @@ use opencv::prelude::*;
 
 use crate::core::geometry;
 use crate::models::photo_meta::{LonLat, PhotoMeta};
-use crate::models::stitch_result::{StitchBackend, StitchProgress, StitchResult, StitchStage};
+use crate::models::stitch_result::{NeighborCap, StitchBackend, StitchProgress, StitchResult, StitchStage};
 use crate::utils::temp_workspace::TempWorkspace;
 use crate::utils::thread_pool::par_map_with_progress;
 
@@ -31,7 +31,13 @@ const EARTH_RADIUS_M: f64 = 6_378_137.0;
 /// `extractor_model_path`/`matcher_model_path` locating those two model
 /// files) or `Orb` (`features.rs`'s ORB detector + `matching.rs`'s
 /// BFMatcher, CPU-only, ignoring the model paths entirely - see those
-/// modules' doc comments for when to prefer this fallback). `on_progress` is
+/// modules' doc comments for when to prefer this fallback). `neighbor_cap`
+/// picks whether the MatchingPairs stage caps each photo's candidate-
+/// neighbor count or matches every pair the overlap threshold allows - see
+/// `neighbor_index.rs`'s and `NeighborCap`'s doc comments for the
+/// time-vs-pose-graph-redundancy trade-off this represents; `Capped` is the
+/// sane default, `Uncapped` is for a user who wants maximum robustness and
+/// is willing to trade (potentially hours of) time for it. `on_progress` is
 /// called throughout - each call names the pipeline stage currently running
 /// plus a 0-100 percent *within* that stage - so the caller can show real
 /// progress instead of a bar that stalls after downsampling while feature
@@ -41,6 +47,7 @@ pub fn run(
     photos: Vec<PhotoMeta>,
     output_path: &Path,
     backend: StitchBackend,
+    neighbor_cap: NeighborCap,
     extractor_model_path: &Path,
     matcher_model_path: &Path,
     on_progress: impl Fn(StitchProgress) + Sync,
@@ -85,8 +92,12 @@ pub fn run(
     let image_paths: Vec<PathBuf> = cached_images.iter().map(|c| c.path.clone()).collect();
     let image_sizes: Vec<(f64, f64)> = cached_images.iter().map(|c| (c.width as f64, c.height as f64)).collect();
 
+    let max_neighbors_per_photo = match neighbor_cap {
+        NeighborCap::Capped => Some(neighbor_index::MAX_NEIGHBORS_PER_PHOTO),
+        NeighborCap::Uncapped => None,
+    };
     let radius_m = neighbor_index::typical_radius_m(&photos);
-    let pairs = neighbor_index::find_neighbor_pairs(&photos, radius_m);
+    let pairs = neighbor_index::find_neighbor_pairs(&photos, radius_m, max_neighbors_per_photo);
 
     let pair_results = match backend {
         StitchBackend::Onnx => match_pairs_onnx(&image_paths, extractor_model_path, matcher_model_path, pairs, &report)?,
@@ -140,6 +151,7 @@ pub fn run(
         preview_path: preview_path.to_string_lossy().to_string(),
         preview_corners,
         backend,
+        neighbor_cap,
         photos_used: photos.len(),
         photos_skipped,
         confident_pairs,

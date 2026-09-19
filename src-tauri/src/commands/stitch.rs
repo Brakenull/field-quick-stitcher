@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::stitching::pipeline;
 use crate::models::photo_meta::PhotoMeta;
-use crate::models::stitch_result::{StitchBackend, StitchResult};
+use crate::models::stitch_result::{NeighborCap, StitchBackend, StitchResult};
 use crate::AppState;
 
 /// Builds a quick orthomosaic GeoTIFF from the photos of the most recent
@@ -13,13 +13,16 @@ use crate::AppState;
 /// footprint (GPS + yaw + altitude + focal + sensor) can be placed, so this
 /// reuses exactly the same filtering `inspect_directory` already applied for
 /// the overlap heatmap. `backend` picks ONNX (default) vs. ORB (CPU-only
-/// fallback) - see `pipeline::run`'s doc comment.
+/// fallback), and `neighbor_cap` picks whether MatchingPairs bounds each
+/// photo's neighbor count or matches every overlapping pair - see
+/// `pipeline::run`'s doc comment for both.
 #[tauri::command]
 pub async fn quick_stitch(
     app: AppHandle,
     state: State<'_, AppState>,
     output_path: String,
     backend: StitchBackend,
+    neighbor_cap: NeighborCap,
 ) -> Result<StitchResult, String> {
     let photos: Vec<PhotoMeta> = {
         let guard = state.last_inspection.lock().map_err(|e| e.to_string())?;
@@ -50,7 +53,7 @@ pub async fn quick_stitch(
     let log_path_for_closure = log_path.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        pipeline::run(photos, Path::new(&output_path), backend, &extractor_model_path, &matcher_model_path, move |progress| {
+        pipeline::run(photos, Path::new(&output_path), backend, neighbor_cap, &extractor_model_path, &matcher_model_path, move |progress| {
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path_for_closure) {
                 let _ = writeln!(f, "{:>8.1}s  {:?}: {}%", log_start.elapsed().as_secs_f64(), progress.stage, progress.percent);
             }

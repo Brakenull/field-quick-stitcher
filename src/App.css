@@ -192,7 +192,7 @@ body,
   gap: 8px;
 }
 
-.stitch-backend {
+.stitch-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -200,7 +200,7 @@ body,
   color: #94a3b8;
 }
 
-.stitch-backend select {
+.stitch-field select {
   background: #1f2937;
   color: #e2e8f0;
   border: 1px solid #334155;
@@ -210,7 +210,7 @@ body,
   cursor: pointer;
 }
 
-.stitch-backend select:disabled {
+.stitch-field select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

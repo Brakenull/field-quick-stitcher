@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { StitchBackend, StitchProgress, StitchResult, StitchStatus } from "../types/flight";
+import type { NeighborCap, StitchBackend, StitchProgress, StitchResult, StitchStatus } from "../types/flight";
 
 const IDLE_PROGRESS: StitchProgress = { stage: "downsampling", percent: 0 };
 
@@ -12,7 +12,7 @@ export function useQuickStitch() {
   const [error, setError] = useState<string | null>(null);
   const unlistenRef = useRef<null | (() => void)>(null);
 
-  const stitch = useCallback(async (outputPath: string, backend: StitchBackend) => {
+  const stitch = useCallback(async (outputPath: string, backend: StitchBackend, neighborCap: NeighborCap) => {
     setStatus("stitching");
     setProgress(IDLE_PROGRESS);
     setError(null);
@@ -23,7 +23,7 @@ export function useQuickStitch() {
     });
 
     try {
-      const stitchResult = await invoke<StitchResult>("quick_stitch", { outputPath, backend });
+      const stitchResult = await invoke<StitchResult>("quick_stitch", { outputPath, backend, neighborCap });
       setResult(stitchResult);
       setStatus("done");
     } catch (err) {

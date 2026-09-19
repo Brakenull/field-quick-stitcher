@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use crate::core::stitching::pipeline;
 use crate::core::{blur_detector, geometry, metadata_parser};
 use crate::models::photo_meta::PhotoMeta;
-use crate::models::stitch_result::StitchBackend;
+use crate::models::stitch_result::{NeighborCap, StitchBackend};
 
 const REAL_DATA_DIR: &str = r"C:\Users\brake\Local\Cowork\search-test_images\Result\Jablunkov_Pass_Fortifications_CZ";
 
@@ -70,7 +70,7 @@ fn full_stitch_pipeline_on_two_real_overlapping_photos() {
     let output_path = out_dir.path().join("mosaic.tif");
     let extractor_model_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint.onnx"));
     let matcher_model_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/superpoint_lightglue.trt.onnx"));
-    let result = pipeline::run(photos, &output_path, StitchBackend::Onnx, extractor_model_path, matcher_model_path, |_| {})
+    let result = pipeline::run(photos, &output_path, StitchBackend::Onnx, NeighborCap::Capped, extractor_model_path, matcher_model_path, |_| {})
         .expect("pipeline should succeed");
 
     assert_eq!(result.photos_used, 2);

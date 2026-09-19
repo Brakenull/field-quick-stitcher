@@ -3,14 +3,25 @@
 //! O(N^2) all-pairs comparison a naive stitcher would do. Three-stage filter:
 //! a cheap R-tree distance radius first (spec section 2b: `R ≈ W_ground`,
 //! keeps this sub-O(N^2)), an exact footprint-polygon overlap-area check
-//! (section 6.1.b: >30% overlap) on just the surviving candidates, then a
-//! per-photo top-K cap (see [`MAX_NEIGHBORS_PER_PHOTO`]) not in the spec but
-//! needed in practice - a real dense-grid ("cross-hatch") survey with high
-//! front+side overlap pushed a photo's neighbor count past 80 (172 photos,
-//! 7,210 pairs, median 85/photo), and at ~1.8-2s/pair serialized through one
-//! CPU matcher session (`onnx_matcher.rs`), that's ~3.7 hours in the
-//! MatchingPairs stage alone for what pose-graph alignment only needed a
-//! handful of strong edges per photo to solve just as well.
+//! (section 6.1.b: >30% overlap) on just the surviving candidates, then an
+//! optional per-photo top-K cap (see [`MAX_NEIGHBORS_PER_PHOTO`]) not in the
+//! spec but needed in practice - a real dense-grid ("cross-hatch") survey
+//! with high front+side overlap pushed a photo's neighbor count past 80 (172
+//! photos, 7,210 pairs, median 85/photo), and at ~1.8-2s/pair serialized
+//! through one CPU matcher session (`onnx_matcher.rs`), that's ~3.7 hours in
+//! the MatchingPairs stage alone for what pose-graph alignment often only
+//! needed a handful of strong edges per photo to solve nearly as well.
+//!
+//! The cap is optional, not unconditional: capping trades away real
+//! pose-graph edge redundancy for that bounded runtime (confirmed capping
+//! trims *every* real survey tested so far, not just dense ones - see
+//! `find_neighbor_pairs`'s doc comment - so it's never a no-op), and nothing
+//! here has verified that trade never costs georeferencing accuracy or seam
+//! quality on some future survey. So this is a user-facing choice
+//! (`NeighborCap` - `pipeline::run`'s `neighbor_cap` parameter), not a fixed
+//! constant: capped is the sane default, but a user who wants every possible
+//! edge for maximum robustness and is willing to trade time for it can ask
+//! for that.
 
 use std::collections::HashSet;
 
@@ -25,13 +36,14 @@ const EARTH_RADIUS_M: f64 = 6_378_137.0;
 const MIN_OVERLAP_FRACTION: f64 = 0.3;
 
 /// Max neighbors kept per photo, ranked by overlap fraction, after the
-/// >30% threshold above - see the module doc comment for why this exists.
-/// Pose-graph alignment (`pose_graph.rs`) needs enough edges for
-/// connectivity and a bit of redundancy, not an edge for literally every
-/// pair above the overlap threshold; 10 comfortably covers a normal
-/// single-pass strip survey's handful of along-track + cross-track
+/// >30% threshold above, when the caller opts into capping (see the module
+/// doc comment for why this exists and why it's opt-in rather than
+/// unconditional). Pose-graph alignment (`pose_graph.rs`) needs enough
+/// edges for connectivity and a bit of redundancy, not an edge for
+/// literally every pair above the overlap threshold; 10 comfortably covers
+/// a normal single-pass strip survey's handful of along-track + cross-track
 /// neighbors while still bounding a dense-grid survey's matching cost.
-const MAX_NEIGHBORS_PER_PHOTO: usize = 10;
+pub const MAX_NEIGHBORS_PER_PHOTO: usize = 10;
 
 struct IndexedCenter {
     idx: usize,
@@ -71,7 +83,16 @@ pub fn typical_radius_m(photos: &[PhotoMeta]) -> f64 {
 /// [`MIN_OVERLAP_FRACTION`] of the smaller footprint's area. `photos` should be
 /// indexed the same way the caller will use the returned indices (e.g. the
 /// same slice passed to feature matching).
-pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64) -> Vec<(usize, usize)> {
+///
+/// `max_neighbors_per_photo` is the top-K cap discussed in the module doc
+/// comment: `Some(k)` ranks each photo's surviving candidates by overlap
+/// fraction and keeps a pair only if it's in either endpoint's top `k`;
+/// `None` keeps every pair that passed the overlap threshold, uncapped,
+/// matching this function's original (pre-cap) behavior. Measured on real
+/// surveys, uncapped can mean 5-8x more pairs than capped - see this
+/// module's doc comment and `pipeline.rs`'s `NeighborCap` for the
+/// time/robustness trade-off this represents.
+pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64, max_neighbors_per_photo: Option<usize>) -> Vec<(usize, usize)> {
     if photos.len() < 2 || radius_m <= 0.0 {
         return Vec::new();
     }
@@ -128,7 +149,10 @@ pub fn find_neighbor_pairs(photos: &[PhotoMeta], radius_m: f64) -> Vec<(usize, u
         })
         .collect();
 
-    let mut result: Vec<_> = cap_neighbors_per_photo(&scored, photos.len(), MAX_NEIGHBORS_PER_PHOTO).into_iter().collect();
+    let mut result: Vec<(usize, usize)> = match max_neighbors_per_photo {
+        Some(max) => cap_neighbors_per_photo(&scored, photos.len(), max).into_iter().collect(),
+        None => scored.into_iter().map(|(i, j, _)| (i, j)).collect(),
+    };
     result.sort_unstable();
     result
 }
@@ -315,7 +339,7 @@ mod tests {
         let radius = typical_radius_m(&photos);
         assert!(radius > 0.0, "photos have full metadata, should get a nonzero radius");
 
-        let pairs = find_neighbor_pairs(&photos, radius.max(20.0));
+        let pairs = find_neighbor_pairs(&photos, radius.max(20.0), Some(MAX_NEIGHBORS_PER_PHOTO));
         assert!(pairs.contains(&(0, 1)), "adjacent grid shots should be neighbors");
         assert!(!pairs.contains(&(0, 2)), "the far-away shot should not be a neighbor");
         assert!(!pairs.contains(&(1, 2)));
@@ -323,14 +347,14 @@ mod tests {
 
     #[test]
     fn fewer_than_two_photos_has_no_pairs() {
-        assert!(find_neighbor_pairs(&[], 100.0).is_empty());
-        assert!(find_neighbor_pairs(&[photo_at(10.0, 106.0)], 100.0).is_empty());
+        assert!(find_neighbor_pairs(&[], 100.0, Some(MAX_NEIGHBORS_PER_PHOTO)).is_empty());
+        assert!(find_neighbor_pairs(&[photo_at(10.0, 106.0)], 100.0, Some(MAX_NEIGHBORS_PER_PHOTO)).is_empty());
     }
 
     #[test]
     fn zero_radius_has_no_pairs() {
         let photos = vec![photo_at(10.0, 106.0), photo_at(10.0, 106.0001)];
-        assert!(find_neighbor_pairs(&photos, 0.0).is_empty());
+        assert!(find_neighbor_pairs(&photos, 0.0, Some(MAX_NEIGHBORS_PER_PHOTO)).is_empty());
     }
 
     #[test]
@@ -360,7 +384,7 @@ mod tests {
         let photos = vec![a, b];
 
         let radius = typical_radius_m(&photos);
-        let pairs = find_neighbor_pairs(&photos, radius);
+        let pairs = find_neighbor_pairs(&photos, radius, Some(MAX_NEIGHBORS_PER_PHOTO));
         assert!(pairs.is_empty(), "barely-touching footprints should fail the >30% overlap check");
     }
 
@@ -372,7 +396,7 @@ mod tests {
         let photos = vec![a, b];
 
         let radius = typical_radius_m(&photos);
-        let pairs = find_neighbor_pairs(&photos, radius);
+        let pairs = find_neighbor_pairs(&photos, radius, Some(MAX_NEIGHBORS_PER_PHOTO));
         assert_eq!(pairs, vec![(0, 1)]);
     }
 
@@ -399,31 +423,51 @@ mod tests {
         assert!(kept.contains(&(4, 5)));
     }
 
-    #[test]
-    fn find_neighbor_pairs_bounds_a_dense_grid_survey() {
-        // 5x5 grid, ~20m spacing, every photo overlapping most others within
-        // the radius (mirrors the real dense "cross-hatch" survey that
-        // motivated the cap: median 85 neighbors/photo, unbounded). Without
-        // the cap this produces a near-complete graph; with it, no photo
-        // should end up with a lot more than MAX_NEIGHBORS_PER_PHOTO edges.
+    fn dense_grid_survey() -> Vec<PhotoMeta> {
+        // 5x5 grid, ~15.5m spacing, every photo overlapping most others
+        // within the radius (mirrors the real dense "cross-hatch" survey
+        // that motivated the cap: median 85 neighbors/photo, unbounded).
         let mut photos = Vec::new();
         for row in 0..5 {
             for col in 0..5 {
-                let lat = 10.0 + row as f64 * 0.00014; // ~15.5m spacing
+                let lat = 10.0 + row as f64 * 0.00014;
                 let lon = 106.0 + col as f64 * 0.00014;
                 photos.push(photo_with_computed_footprint(lat, lon, 0.0));
             }
         }
+        photos
+    }
 
-        let radius = typical_radius_m(&photos);
-        let pairs = find_neighbor_pairs(&photos, radius);
-
-        let mut counts = vec![0usize; photos.len()];
-        for &(i, j) in &pairs {
+    fn max_pairs_per_photo(pairs: &[(usize, usize)], photo_count: usize) -> usize {
+        let mut counts = vec![0usize; photo_count];
+        for &(i, j) in pairs {
             counts[i] += 1;
             counts[j] += 1;
         }
-        let max_count = counts.iter().copied().max().unwrap_or(0);
+        counts.into_iter().max().unwrap_or(0)
+    }
+
+    #[test]
+    fn find_neighbor_pairs_bounds_a_dense_grid_survey_when_capped() {
+        // With `Some(k)`, no photo should end up with a lot more than
+        // MAX_NEIGHBORS_PER_PHOTO edges - the whole point of the cap.
+        let photos = dense_grid_survey();
+        let radius = typical_radius_m(&photos);
+        let pairs = find_neighbor_pairs(&photos, radius, Some(MAX_NEIGHBORS_PER_PHOTO));
+        let max_count = max_pairs_per_photo(&pairs, photos.len());
         assert!(max_count <= MAX_NEIGHBORS_PER_PHOTO * 2, "expected the cap to bound per-photo neighbor count, got {max_count}");
+    }
+
+    #[test]
+    fn find_neighbor_pairs_stays_uncapped_when_requested() {
+        // With `None`, the user opted into every pair above the overlap
+        // threshold - a densely-overlapping grid should exceed the cap's
+        // bound by a wide margin, proving `None` genuinely skips it rather
+        // than silently applying a cap anyway.
+        let photos = dense_grid_survey();
+        let radius = typical_radius_m(&photos);
+        let pairs = find_neighbor_pairs(&photos, radius, None);
+        let max_count = max_pairs_per_photo(&pairs, photos.len());
+        assert!(max_count > MAX_NEIGHBORS_PER_PHOTO * 2, "expected uncapped mode to exceed the cap's bound, got {max_count}");
     }
 }

@@ -14,6 +14,24 @@ pub enum StitchBackend {
     Orb,
 }
 
+/// Whether the MatchingPairs stage caps each photo's candidate-neighbor
+/// count (`core::stitching::neighbor_index::MAX_NEIGHBORS_PER_PHOTO`) or
+/// matches every pair above the overlap threshold - see that module's doc
+/// comment for the mechanics and `pipeline::run`'s doc comment for the
+/// trade-off this exposes. `Capped` bounds MatchingPairs runtime to roughly
+/// photo-count-only, independent of how much the survey's flight lines
+/// overlap themselves, at the cost of dropping some pose-graph edge
+/// redundancy; `Uncapped` matches every pair the overlap threshold allows,
+/// for a user who wants maximum pose-graph robustness and is willing to
+/// trade time for it (confirmed 5-8x more pairs, hours instead of tens of
+/// minutes, on real dense surveys). `Capped` is the default.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NeighborCap {
+    Capped,
+    Uncapped,
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StitchResult {
@@ -26,6 +44,7 @@ pub struct StitchResult {
     /// top-left, top-right, bottom-right, bottom-left.
     pub preview_corners: [LonLat; 4],
     pub backend: StitchBackend,
+    pub neighbor_cap: NeighborCap,
     pub photos_used: usize,
     pub photos_skipped: usize,
     pub confident_pairs: usize,
