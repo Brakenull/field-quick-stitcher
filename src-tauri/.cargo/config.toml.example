@@ -5,10 +5,21 @@
 # GDAL was dropped per quick-stitch.md section 3 (replaced by the pure-Rust
 # `tiff` crate for GeoTIFF I/O), so only opencv's native toolchain is needed now.
 #
-# To regenerate INCLUDE/LIB: open "Developer PowerShell for VS", run
-#   echo $env:INCLUDE
-#   echo $env:LIB
-# and paste the results below (semicolon-separated, single-quoted).
+# Prerequisites (do these first, outside this file):
+# 1. Visual Studio must have the "Desktop development with C++" workload installed,
+#    not just VS itself - a VS install can exist with no MSVC toolset at all (no
+#    VC\Tools\MSVC\<ver>\, no vcvars64.bat), in which case nothing below will work.
+#    Verify with:
+#      vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+#    If that prints nothing, install the workload via the VS Installer first.
+# 2. vcpkg must be cloned + bootstrapped, and opencv4 actually installed into it:
+#      <vcpkg checkout>\bootstrap-vcpkg.bat
+#      <vcpkg checkout>\vcpkg install opencv4:x64-windows
+#    (from-source build, expect 20-40+ min). Confirm with `vcpkg list`.
+# 3. To regenerate INCLUDE/LIB below: open "Developer PowerShell for VS", run
+#      echo $env:INCLUDE
+#      echo $env:LIB
+#    and paste the results below (semicolon-separated, single-quoted).
 
 [env]
 VCPKG_ROOT = '<path to your vcpkg checkout, e.g. C:\vcpkg>'
@@ -24,7 +35,9 @@ LIBCLANG_PATH = '<path to LLVM bin, e.g. C:\Program Files\LLVM\bin>'
 # machine-wide User/System env vars (outside this file):
 #   OPENCV_VCPKG_NAME=opencv4
 # and leave OPENCV_PACKAGE_NAME unset so cmake probing (package name "OpenCV") still
-# works too, should you ever get cmake/ninja installed.
+# works too, should you ever get cmake/ninja installed. Also make sure no stale
+# OpenCV_DIR env var is lingering from a previous/relocated vcpkg checkout - it isn't
+# needed for the vcpkg probe and a dangling path just invites confusing failures.
 
 # clang (opencv's binding generator) needs the MSVC STL + Windows SDK headers/libs
 # that a "Developer Command Prompt" would normally set up via vcvars64.bat. Baked
@@ -40,5 +53,6 @@ CLANG_PATH = '<path to clang.exe, e.g. C:\Program Files\LLVM\bin\clang.exe>'
 
 # vcpkg's installed\x64-windows\bin carries the opencv DLLs (and their
 # transitive deps) needed at runtime. Since PATH can't be set here, add that
-# directory to your own Windows user PATH once (a normal one-time machine
-# setup step) so `cargo run`/`tauri dev` can load them.
+# directory to your own Windows user or system PATH once (a normal one-time
+# machine setup step, e.g. <vcpkg checkout>\installed\x64-windows\bin) so
+# `cargo run`/`tauri dev` can load them.

@@ -24,10 +24,8 @@ dist-ssr
 *.sw?
 
 # Claude folder
+CLAUDE.md
 .claude/*
-
-# Offline basemap tile package (44MB, regenerate via scripts/fetch-offline-basemap.ps1)
-public/offline_tiles/*.pmtiles
 
 src-tauri/resources/*
 !src-tauri/resources/README.md

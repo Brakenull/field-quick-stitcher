@@ -113,3 +113,36 @@ export interface StitchProgress {
   stage: StitchStage;
   percent: number;
 }
+
+/** Mirrors `BasemapBbox` (`src-tauri/src/models/offline_basemap.rs`). */
+export interface BasemapBbox {
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+}
+
+/** Mirrors `OfflineBasemapStage` (`src-tauri/src/models/offline_basemap.rs`). */
+export type OfflineBasemapStage = "locating-build" | "downloading-tiles" | "finalizing";
+
+export interface OfflineBasemapProgress {
+  stage: OfflineBasemapStage;
+  tilesDone: number;
+  tilesTotal: number;
+  percent: number;
+}
+
+/** Mirrors `OfflineBasemapInfo` (`src-tauri/src/models/offline_basemap.rs`) -
+ * also what `get_offline_basemap_info` returns for whatever's currently on disk. */
+export interface OfflineBasemapInfo {
+  path: string;
+  bbox: BasemapBbox;
+  maxZoom: number;
+  tileCount: number;
+  tilesFailed: number;
+  sizeBytes: number;
+  sourceBuild: string;
+  downloadedAt: string;
+}
+
+export type OfflineBasemapStatus = "idle" | "downloading" | "done" | "error";

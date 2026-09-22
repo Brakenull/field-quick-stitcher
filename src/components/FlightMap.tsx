@@ -1,15 +1,21 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
-import { Protocol } from "pmtiles";
+import { PMTiles, Protocol, type RangeResponse, type Source } from "pmtiles";
 import { layers as protomapsLayers, LIGHT } from "@protomaps/basemaps";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { GeoFeature, InspectionResult, StitchResult } from "../types/flight";
+import type { BasemapBbox, GeoFeature, InspectionResult, OfflineBasemapInfo, StitchResult } from "../types/flight";
 import type { LayerVisibility } from "./LayerControl";
 
 export interface FlightMapHandle {
   flyTo: (lat: number, lon: number) => void;
+  /** Manually swaps in whatever offline basemap is currently on disk (see
+   * OfflineBasemapInfoCard) - loading it is a deliberate user action rather
+   * than something that happens automatically on download or app start, so
+   * a stale/huge cached basemap never surprises someone by loading itself.
+   * Resolves false if none is downloaded (or it failed to load). */
+  loadOfflineBasemap: () => Promise<boolean>;
 }
 
 interface FlightMapProps {
@@ -22,22 +28,44 @@ interface FlightMapProps {
 const MOSAIC_SOURCE_ID = "mosaic";
 const MOSAIC_LAYER_ID = "mosaic-layer";
 
-// A worldwide, low-zoom (0-6) OpenStreetMap-derived vector basemap bundled as a
-// static asset (see public/offline_tiles/README.md - it's gitignored and fetched
-// via scripts/fetch-offline-basemap.ps1, not committed, to keep the repo lean).
-// This is deliberately coarse (coastlines/borders/place names, not street-level
-// detail) - just enough offline geographic context to orient a flight, per a
-// specific survey site's own imagery/footprints for the real detail.
-const OFFLINE_BASEMAP_URL = "/offline_tiles/basemap.pmtiles";
+// The offline basemap is downloaded per-area by the user via
+// OfflineBasemapPanel/download_offline_basemap into Tauri's app-data dir (not
+// a static bundled asset - that only worked pre-packaging, see git history),
+// then loaded here through the asset protocol like the Quick Stitch preview
+// PNG. If nothing's been downloaded yet, falls back to a blank background -
+// the flight geometry (path, footprints, heatmap) still renders fine either way.
 const OFFLINE_BASEMAP_SOURCE_ID = "offline-basemap";
 const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
 
-let pmtilesProtocolRegistered = false;
-function ensurePmtilesProtocolRegistered() {
-  if (pmtilesProtocolRegistered) return;
-  const protocol = new Protocol();
-  maplibregl.addProtocol("pmtiles", protocol.tile);
-  pmtilesProtocolRegistered = true;
+let pmtilesProtocol: Protocol | null = null;
+function ensurePmtilesProtocolRegistered(): Protocol {
+  if (!pmtilesProtocol) {
+    pmtilesProtocol = new Protocol();
+    maplibregl.addProtocol("pmtiles", pmtilesProtocol.tile);
+  }
+  return pmtilesProtocol;
+}
+
+/** Reads tiles out of an in-memory copy of the archive instead of letting
+ * `pmtiles` issue HTTP Range requests against Tauri's asset protocol -
+ * that combination has known byte-serving issues in Tauri's custom-protocol
+ * handler (https://github.com/orgs/tauri-apps/discussions/12243) and was
+ * confirmed here too: a downloaded basemap "succeeded" but rendered as a
+ * flat background with no vector tiles. A single whole-file GET through the
+ * asset protocol is already proven to work in this app (the Quick Stitch
+ * mosaic preview image uses the same `convertFileSrc` + `fetch` shape), so
+ * this fetches once and serves tiles from the resulting buffer instead. */
+class BufferSource implements Source {
+  constructor(
+    private key: string,
+    private buffer: ArrayBuffer,
+  ) {}
+  getKey() {
+    return this.key;
+  }
+  async getBytes(offset: number, length: number): Promise<RangeResponse> {
+    return { data: this.buffer.slice(offset, offset + length) };
+  }
 }
 
 // Fallback when the offline basemap package isn't present (fresh clone that
@@ -49,7 +77,7 @@ const BLANK_STYLE: StyleSpecification = {
   layers: [{ id: "background", type: "background", paint: { "background-color": "#eef1f2" } }],
 };
 
-function offlineBasemapStyle(): StyleSpecification {
+function offlineBasemapStyle(key: string, maxZoom: number): StyleSpecification {
   // Keep only fill/line/background layers - symbol (text/icon) layers need a
   // glyphs/sprite service we don't bundle, and would otherwise just silently
   // fail to render labels while still costing a style-parse warning.
@@ -61,25 +89,46 @@ function offlineBasemapStyle(): StyleSpecification {
     sources: {
       [OFFLINE_BASEMAP_SOURCE_ID]: {
         type: "vector",
-        url: `pmtiles://${OFFLINE_BASEMAP_URL}`,
+        // Must match BufferSource's getKey() below exactly - the Protocol
+        // resolves this URL to the matching registered PMTiles instance
+        // rather than fetching it itself.
+        url: `pmtiles://${key}`,
         attribution: OSM_ATTRIBUTION,
+        // Without this, MapLibre requests tiles at whatever zoom the camera
+        // reaches (e.g. after fitBounds on a small area) - the archive only
+        // has tiles up to the zoom it was downloaded at, pmtiles.Protocol
+        // does no overzoom fallback (looks up the exact z/x/y and returns
+        // nothing if absent), so those requests silently come back empty and
+        // only the background paint shows. Declaring maxzoom here tells
+        // MapLibre to stop requesting past it and instead overzoom
+        // (upscale) the last available tile client-side.
+        maxzoom: maxZoom,
       },
     },
     layers: renderable,
   } as StyleSpecification;
 }
 
-async function resolveBaseStyle(): Promise<{ style: StyleSpecification; hasOfflineBasemap: boolean }> {
+async function resolveBaseStyle(): Promise<{
+  style: StyleSpecification;
+  hasOfflineBasemap: boolean;
+  bbox: BasemapBbox | null;
+  maxZoom: number;
+}> {
   try {
-    const res = await fetch(OFFLINE_BASEMAP_URL, { method: "HEAD" });
-    if (res.ok) {
-      ensurePmtilesProtocolRegistered();
-      return { style: offlineBasemapStyle(), hasOfflineBasemap: true };
+    const info = await invoke<OfflineBasemapInfo | null>("get_offline_basemap_info");
+    if (info) {
+      const protocol = ensurePmtilesProtocolRegistered();
+      const res = await fetch(convertFileSrc(info.path));
+      if (!res.ok) throw new Error(`failed to read offline basemap file: ${res.status}`);
+      const buffer = await res.arrayBuffer();
+      protocol.add(new PMTiles(new BufferSource(info.path, buffer)));
+      return { style: offlineBasemapStyle(info.path, info.maxZoom), hasOfflineBasemap: true, bbox: info.bbox, maxZoom: info.maxZoom };
     }
   } catch {
-    // No offline basemap package on disk (or blocked) - fall back below.
+    // No offline basemap downloaded yet (or reading/parsing it failed) - fall back below.
   }
-  return { style: BLANK_STYLE, hasOfflineBasemap: false };
+  return { style: BLANK_STYLE, hasOfflineBasemap: false, bbox: null, maxZoom: 0 };
 }
 
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as GeoFeature[] };
@@ -109,6 +158,83 @@ function boundsOf(result: InspectionResult): maplibregl.LngLatBoundsLike | null 
   ];
 }
 
+/** Adds the flight/footprints/heatmap sources+layers this app always draws
+ * on top of whatever base style is active - shared between the initial map
+ * load and a live style swap (`setStyle` wipes anything added outside the
+ * style object, so this has to be re-run after one). */
+function addBaseLayers(map: maplibregl.Map) {
+  map.addSource("footprints", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "footprints-fill",
+    type: "fill",
+    source: "footprints",
+    paint: { "fill-color": "#3b82f6", "fill-opacity": 0.08 },
+  });
+  map.addLayer({
+    id: "footprints-outline",
+    type: "line",
+    source: "footprints",
+    paint: { "line-color": "#3b82f6", "line-width": 0.5, "line-opacity": 0.4 },
+  });
+
+  map.addSource("heatmap", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "heatmap-fill",
+    type: "fill",
+    source: "heatmap",
+    paint: {
+      "fill-color": ["match", ["get", "level"], "red", "#ef4444", "yellow", "#eab308", "green", "#22c55e", "#999999"],
+      "fill-opacity": 0.45,
+    },
+  });
+
+  map.addSource("flight", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({
+    id: "flight-path-line",
+    type: "line",
+    source: "flight",
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: { "line-color": "#1e293b", "line-width": 2 },
+  });
+  map.addLayer({
+    id: "photo-points",
+    type: "circle",
+    source: "flight",
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: {
+      "circle-radius": 4,
+      "circle-color": ["case", ["get", "isBlurry"], "#ef4444", "#2563eb"],
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": 1,
+    },
+  });
+}
+
+/** Adds (or re-adds) the Quick Stitch mosaic image source+layer - shared
+ * between the stitchResult-driven effect and a live style swap, since
+ * `setStyle` wipes this layer too even though `stitchResult` itself hasn't changed. */
+function applyMosaic(map: maplibregl.Map, stitchResult: StitchResult | null, mosaicOpacity: number, visibility: LayerVisibility) {
+  if (map.getLayer(MOSAIC_LAYER_ID)) map.removeLayer(MOSAIC_LAYER_ID);
+  if (map.getSource(MOSAIC_SOURCE_ID)) map.removeSource(MOSAIC_SOURCE_ID);
+
+  if (!stitchResult) return;
+  map.addSource(MOSAIC_SOURCE_ID, {
+    type: "image",
+    url: convertFileSrc(stitchResult.previewPath),
+    coordinates: stitchResult.previewCorners,
+  });
+  map.addLayer(
+    {
+      id: MOSAIC_LAYER_ID,
+      type: "raster",
+      source: MOSAIC_SOURCE_ID,
+      paint: { "raster-opacity": mosaicOpacity },
+      layout: { visibility: visibility.mosaic ? "visible" : "none" },
+    },
+    map.getLayer("footprints-fill") ? "footprints-fill" : undefined,
+  );
+}
+
 export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function FlightMap(
   { result, visibility, stitchResult, mosaicOpacity },
   ref,
@@ -116,90 +242,80 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const loadedRef = useRef(false);
+  const attributionAddedRef = useRef(false);
 
   useImperativeHandle(ref, () => ({
     flyTo(lat, lon) {
       mapRef.current?.flyTo({ center: [lon, lat], zoom: 19, duration: 600 });
     },
+    async loadOfflineBasemap() {
+      const map = mapRef.current;
+      if (!map || !loadedRef.current) return false;
+
+      const { style, hasOfflineBasemap, bbox, maxZoom } = await resolveBaseStyle();
+      if (!hasOfflineBasemap) return false;
+
+      await new Promise<void>((resolve) => {
+        map.once("style.load", () => {
+          addBaseLayers(map);
+          applyData(map, result);
+          applyVisibility(map, visibility);
+          applyMosaic(map, stitchResult, mosaicOpacity, visibility);
+          resolve();
+        });
+        map.setStyle(style, { diff: false });
+      });
+
+      if (!attributionAddedRef.current) {
+        map.addControl(new maplibregl.AttributionControl(), "bottom-right");
+        attributionAddedRef.current = true;
+      }
+
+      // Fly to the downloaded area - without this the camera stays wherever
+      // it was (often [0, 0] zoom 2 if no scan has run yet), so the newly
+      // loaded tiles are technically on the map but nowhere near the view.
+      if (bbox) {
+        map.fitBounds(
+          [
+            [bbox.minLon, bbox.minLat],
+            [bbox.maxLon, bbox.maxLat],
+          ],
+          { padding: 40, duration: 600, maxZoom },
+        );
+      }
+      return true;
+    },
   }));
 
+  // Always starts blank - the offline basemap (if any is cached on disk) is
+  // only wired in when the user clicks "Show on map" in OfflineBasemapInfoCard
+  // (via loadOfflineBasemap above), never automatically on mount or download.
   useEffect(() => {
     if (!containerRef.current) return;
-    let cancelled = false;
-    let map: maplibregl.Map | null = null;
 
-    resolveBaseStyle().then(({ style, hasOfflineBasemap }) => {
-      if (cancelled || !containerRef.current) return;
-      map = new maplibregl.Map({
-        container: containerRef.current,
-        style,
-        center: [0, 0],
-        zoom: 2,
-        attributionControl: hasOfflineBasemap ? {} : false,
-      });
-      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    const map = new maplibregl.Map({
+      container: containerRef.current,
+      style: BLANK_STYLE,
+      center: [0, 0],
+      zoom: 2,
+      attributionControl: false,
+    });
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
-      map.on("load", () => {
-        if (!map) return;
-        map.addSource("footprints", { type: "geojson", data: EMPTY_FC });
-        map.addLayer({
-          id: "footprints-fill",
-          type: "fill",
-          source: "footprints",
-          paint: { "fill-color": "#3b82f6", "fill-opacity": 0.08 },
-        });
-        map.addLayer({
-          id: "footprints-outline",
-          type: "line",
-          source: "footprints",
-          paint: { "line-color": "#3b82f6", "line-width": 0.5, "line-opacity": 0.4 },
-        });
-
-        map.addSource("heatmap", { type: "geojson", data: EMPTY_FC });
-        map.addLayer({
-          id: "heatmap-fill",
-          type: "fill",
-          source: "heatmap",
-          paint: {
-            "fill-color": ["match", ["get", "level"], "red", "#ef4444", "yellow", "#eab308", "green", "#22c55e", "#999999"],
-            "fill-opacity": 0.45,
-          },
-        });
-
-        map.addSource("flight", { type: "geojson", data: EMPTY_FC });
-        map.addLayer({
-          id: "flight-path-line",
-          type: "line",
-          source: "flight",
-          filter: ["==", ["geometry-type"], "LineString"],
-          paint: { "line-color": "#1e293b", "line-width": 2 },
-        });
-        map.addLayer({
-          id: "photo-points",
-          type: "circle",
-          source: "flight",
-          filter: ["==", ["geometry-type"], "Point"],
-          paint: {
-            "circle-radius": 4,
-            "circle-color": ["case", ["get", "isBlurry"], "#ef4444", "#2563eb"],
-            "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 1,
-          },
-        });
-
-        loadedRef.current = true;
-        applyData(map, result);
-        applyVisibility(map, visibility);
-      });
-
-      mapRef.current = map;
+    map.on("load", () => {
+      addBaseLayers(map);
+      loadedRef.current = true;
+      applyData(map, result);
+      applyVisibility(map, visibility);
     });
 
+    mapRef.current = map;
+
     return () => {
-      cancelled = true;
-      map?.remove();
+      map.remove();
       mapRef.current = null;
       loadedRef.current = false;
+      attributionAddedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -223,26 +339,7 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loadedRef.current) return;
-
-    if (map.getLayer(MOSAIC_LAYER_ID)) map.removeLayer(MOSAIC_LAYER_ID);
-    if (map.getSource(MOSAIC_SOURCE_ID)) map.removeSource(MOSAIC_SOURCE_ID);
-
-    if (!stitchResult) return;
-    map.addSource(MOSAIC_SOURCE_ID, {
-      type: "image",
-      url: convertFileSrc(stitchResult.previewPath),
-      coordinates: stitchResult.previewCorners,
-    });
-    map.addLayer(
-      {
-        id: MOSAIC_LAYER_ID,
-        type: "raster",
-        source: MOSAIC_SOURCE_ID,
-        paint: { "raster-opacity": mosaicOpacity },
-        layout: { visibility: visibility.mosaic ? "visible" : "none" },
-      },
-      map.getLayer("footprints-fill") ? "footprints-fill" : undefined,
-    );
+    applyMosaic(map, stitchResult, mosaicOpacity, visibility);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stitchResult]);
 

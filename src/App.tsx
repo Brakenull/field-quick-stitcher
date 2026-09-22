@@ -4,9 +4,12 @@ import { Dropzone } from "./components/Dropzone";
 import { MetricsBar } from "./components/MetricsBar";
 import { AlertPanel } from "./components/AlertPanel";
 import { LayerControl, type LayerVisibility } from "./components/LayerControl";
+import { OfflineBasemapPanel } from "./components/OfflineBasemapPanel";
+import { OfflineBasemapInfoCard } from "./components/OfflineBasemapInfoCard";
 import { FlightMap, type FlightMapHandle } from "./components/FlightMap";
 import { useFlightInspector } from "./hooks/useFlightInspector";
 import { useQuickStitch } from "./hooks/useQuickStitch";
+import { useOfflineBasemap } from "./hooks/useOfflineBasemap";
 import type { NeighborCap, StitchBackend, StitchStage } from "./types/flight";
 import "./App.css";
 
@@ -36,9 +39,13 @@ const DEFAULT_VISIBILITY: LayerVisibility = {
   mosaic: true,
 };
 
+type SidebarTab = "inspect" | "offline-map";
+
 function App() {
   const { status, progress, result, error, inspect, exportReport, reset } = useFlightInspector();
   const stitchState = useQuickStitch();
+  const offlineBasemap = useOfflineBasemap();
+  const [activeTab, setActiveTab] = useState<SidebarTab>("inspect");
   const [visibility, setVisibility] = useState<LayerVisibility>(DEFAULT_VISIBILITY);
   const [mosaicOpacity, setMosaicOpacity] = useState(0.85);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
@@ -87,95 +94,131 @@ function App() {
           <p>Flight coverage &amp; blur inspector</p>
         </header>
 
-        {status !== "done" && (
-          <Dropzone disabled={status === "scanning"} onFolderSelected={handleInspect} />
-        )}
+        <nav className="sidebar-tabs">
+          <button
+            type="button"
+            className={`sidebar-tabs__item ${activeTab === "inspect" ? "sidebar-tabs__item--active" : ""}`}
+            onClick={() => setActiveTab("inspect")}
+          >
+            Inspect
+          </button>
+          <button
+            type="button"
+            className={`sidebar-tabs__item ${activeTab === "offline-map" ? "sidebar-tabs__item--active" : ""}`}
+            onClick={() => setActiveTab("offline-map")}
+          >
+            Download Map
+          </button>
+        </nav>
 
-        {status === "scanning" && (
-          <div className="progress">
-            <div className="progress__bar">
-              <div className="progress__fill" style={{ width: `${progress}%` }} />
-            </div>
-            <span>{progress}% scanned</span>
-          </div>
-        )}
-
-        {status === "error" && error && <p className="error-banner">{error}</p>}
-
-        {status === "done" && result && (
+        {activeTab === "offline-map" && (
           <>
-            <MetricsBar metrics={result.metrics} />
-            <LayerControl
-              visibility={visibility}
-              onChange={setVisibility}
-              hasMosaic={stitchState.status === "done"}
-              mosaicOpacity={mosaicOpacity}
-              onMosaicOpacityChange={setMosaicOpacity}
+            <OfflineBasemapPanel
+              status={offlineBasemap.status}
+              progress={offlineBasemap.progress}
+              error={offlineBasemap.error}
+              download={offlineBasemap.download}
             />
-            <AlertPanel
-              gaps={result.gaps}
-              blurAlerts={result.blurAlerts}
-              missingGpsFiles={result.photos.filter((p) => p.lat == null || p.lon == null).map((p) => p.fileName)}
-              onFocusPoint={(lat, lon) => mapRef.current?.flyTo(lat, lon)}
+            <OfflineBasemapInfoCard
+              info={offlineBasemap.info}
+              onLoad={() => mapRef.current?.loadOfflineBasemap() ?? Promise.resolve(false)}
             />
+          </>
+        )}
 
-            <div className="stitch-panel">
-              <label className="stitch-field">
-                Backend
-                <select
-                  value={stitchBackend}
-                  onChange={(e) => setStitchBackend(e.target.value as StitchBackend)}
-                  disabled={stitchState.status === "stitching"}
-                >
-                  <option value="onnx">ONNX (SuperPoint + LightGlue, GPU)</option>
-                  <option value="orb">ORB (CPU fallback)</option>
-                </select>
-              </label>
-              <label className="stitch-field" title="Capped: fast, bounded time, trims some pose-graph edge redundancy. Uncapped: every overlapping pair, more robust, can take hours on a densely-overlapping survey.">
-                Neighbor matching
-                <select
-                  value={neighborCap}
-                  onChange={(e) => setNeighborCap(e.target.value as NeighborCap)}
-                  disabled={stitchState.status === "stitching"}
-                >
-                  <option value="capped">Capped (fast, ~10 neighbors/photo)</option>
-                  <option value="uncapped">Uncapped (every overlapping pair, slower)</option>
-                </select>
-              </label>
-              <button onClick={handleQuickStitch} disabled={stitchState.status === "stitching"}>
-                {stitchState.status === "stitching" ? "Stitching..." : "Quick Stitch"}
-              </button>
-              {stitchState.status === "stitching" && (
-                <div className="progress">
-                  <div className="progress__bar">
-                    <div className="progress__fill" style={{ width: `${stitchState.progress.percent}%` }} />
-                  </div>
-                  <span>
-                    {STITCH_STAGE_LABELS[stitchState.progress.stage]} ({STITCH_STAGE_ORDER.indexOf(stitchState.progress.stage) + 1}/
-                    {STITCH_STAGE_ORDER.length}) - {stitchState.progress.percent}%
-                  </span>
+        {activeTab === "inspect" && (
+          <>
+            {status !== "done" && (
+              <Dropzone disabled={status === "scanning"} onFolderSelected={handleInspect} />
+            )}
+
+            {status === "scanning" && (
+              <div className="progress">
+                <div className="progress__bar">
+                  <div className="progress__fill" style={{ width: `${progress}%` }} />
                 </div>
-              )}
-              {stitchState.status === "error" && stitchState.error && (
-                <p className="error-banner">{stitchState.error}</p>
-              )}
-              {stitchState.status === "done" && stitchState.result && (
-                <p className="export-status">
-                  Stitched {stitchState.result.photosUsed} photos via {stitchState.result.backend.toUpperCase()} (
-                  {stitchState.result.neighborCap}, {stitchState.result.confidentPairs} confident pairs) in{" "}
-                  {(stitchState.result.durationMs / 1000).toFixed(1)}s -&gt; {stitchState.result.geotiffPath}
-                </p>
-              )}
-            </div>
+                <span>{progress}% scanned</span>
+              </div>
+            )}
 
-            <div className="export-row">
-              <button onClick={() => handleExport("json")}>Export JSON</button>
-              <button onClick={() => handleExport("pdf")}>Export PDF</button>
-              <button className="ghost" onClick={handleReset}>
-                Scan another card
-              </button>
-            </div>
-            {exportStatus && <p className="export-status">{exportStatus}</p>}
+            {status === "error" && error && <p className="error-banner">{error}</p>}
+
+            {status === "done" && result && (
+              <>
+                <MetricsBar metrics={result.metrics} />
+                <LayerControl
+                  visibility={visibility}
+                  onChange={setVisibility}
+                  hasMosaic={stitchState.status === "done"}
+                  mosaicOpacity={mosaicOpacity}
+                  onMosaicOpacityChange={setMosaicOpacity}
+                />
+                <AlertPanel
+                  gaps={result.gaps}
+                  blurAlerts={result.blurAlerts}
+                  missingGpsFiles={result.photos.filter((p) => p.lat == null || p.lon == null).map((p) => p.fileName)}
+                  onFocusPoint={(lat, lon) => mapRef.current?.flyTo(lat, lon)}
+                />
+
+                <div className="stitch-panel">
+                  <label className="stitch-field">
+                    Backend
+                    <select
+                      value={stitchBackend}
+                      onChange={(e) => setStitchBackend(e.target.value as StitchBackend)}
+                      disabled={stitchState.status === "stitching"}
+                    >
+                      <option value="onnx">ONNX (SuperPoint + LightGlue, GPU)</option>
+                      <option value="orb">ORB (CPU fallback)</option>
+                    </select>
+                  </label>
+                  <label className="stitch-field" title="Capped: fast, bounded time, trims some pose-graph edge redundancy. Uncapped: every overlapping pair, more robust, can take hours on a densely-overlapping survey.">
+                    Neighbor matching
+                    <select
+                      value={neighborCap}
+                      onChange={(e) => setNeighborCap(e.target.value as NeighborCap)}
+                      disabled={stitchState.status === "stitching"}
+                    >
+                      <option value="capped">Capped (fast, ~10 neighbors/photo)</option>
+                      <option value="uncapped">Uncapped (every overlapping pair, slower)</option>
+                    </select>
+                  </label>
+                  <button onClick={handleQuickStitch} disabled={stitchState.status === "stitching"}>
+                    {stitchState.status === "stitching" ? "Stitching..." : "Quick Stitch"}
+                  </button>
+                  {stitchState.status === "stitching" && (
+                    <div className="progress">
+                      <div className="progress__bar">
+                        <div className="progress__fill" style={{ width: `${stitchState.progress.percent}%` }} />
+                      </div>
+                      <span>
+                        {STITCH_STAGE_LABELS[stitchState.progress.stage]} ({STITCH_STAGE_ORDER.indexOf(stitchState.progress.stage) + 1}/
+                        {STITCH_STAGE_ORDER.length}) - {stitchState.progress.percent}%
+                      </span>
+                    </div>
+                  )}
+                  {stitchState.status === "error" && stitchState.error && (
+                    <p className="error-banner">{stitchState.error}</p>
+                  )}
+                  {stitchState.status === "done" && stitchState.result && (
+                    <p className="export-status">
+                      Stitched {stitchState.result.photosUsed} photos via {stitchState.result.backend.toUpperCase()} (
+                      {stitchState.result.neighborCap}, {stitchState.result.confidentPairs} confident pairs) in{" "}
+                      {(stitchState.result.durationMs / 1000).toFixed(1)}s -&gt; {stitchState.result.geotiffPath}
+                    </p>
+                  )}
+                </div>
+
+                <div className="export-row">
+                  <button onClick={() => handleExport("json")}>Export JSON</button>
+                  <button onClick={() => handleExport("pdf")}>Export PDF</button>
+                  <button className="ghost" onClick={handleReset}>
+                    Scan another card
+                  </button>
+                </div>
+                {exportStatus && <p className="export-status">{exportStatus}</p>}
+              </>
+            )}
           </>
         )}
       </aside>

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 
 use commands::export::export_report;
 use commands::inspect::inspect_directory;
+use commands::offline_basemap::{download_offline_basemap, get_offline_basemap_info};
 use commands::stitch::quick_stitch;
 use models::inspection_result::InspectionResult;
 
@@ -32,7 +33,13 @@ pub fn run() {
         .manage(AppState {
             last_inspection: Mutex::new(None),
         })
-        .invoke_handler(tauri::generate_handler![inspect_directory, export_report, quick_stitch])
+        .invoke_handler(tauri::generate_handler![
+            inspect_directory,
+            export_report,
+            quick_stitch,
+            download_offline_basemap,
+            get_offline_basemap_info,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
