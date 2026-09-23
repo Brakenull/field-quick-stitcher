@@ -119,10 +119,7 @@ function App() {
               error={offlineBasemap.error}
               download={offlineBasemap.download}
             />
-            <OfflineBasemapInfoCard
-              info={offlineBasemap.info}
-              onLoad={() => mapRef.current?.loadOfflineBasemap() ?? Promise.resolve(false)}
-            />
+            <OfflineBasemapInfoCard info={offlineBasemap.info} />
           </>
         )}
 

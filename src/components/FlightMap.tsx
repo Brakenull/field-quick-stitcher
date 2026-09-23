@@ -1,21 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
-import { PMTiles, Protocol, type RangeResponse, type Source } from "pmtiles";
-import { layers as protomapsLayers, LIGHT } from "@protomaps/basemaps";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { BasemapBbox, GeoFeature, InspectionResult, OfflineBasemapInfo, StitchResult } from "../types/flight";
+import type { GeoFeature, InspectionResult, StitchResult } from "../types/flight";
 import type { LayerVisibility } from "./LayerControl";
 
 export interface FlightMapHandle {
   flyTo: (lat: number, lon: number) => void;
-  /** Manually swaps in whatever offline basemap is currently on disk (see
-   * OfflineBasemapInfoCard) - loading it is a deliberate user action rather
-   * than something that happens automatically on download or app start, so
-   * a stale/huge cached basemap never surprises someone by loading itself.
-   * Resolves false if none is downloaded (or it failed to load). */
-  loadOfflineBasemap: () => Promise<boolean>;
 }
 
 interface FlightMapProps {
@@ -28,108 +20,16 @@ interface FlightMapProps {
 const MOSAIC_SOURCE_ID = "mosaic";
 const MOSAIC_LAYER_ID = "mosaic-layer";
 
-// The offline basemap is downloaded per-area by the user via
-// OfflineBasemapPanel/download_offline_basemap into Tauri's app-data dir (not
-// a static bundled asset - that only worked pre-packaging, see git history),
-// then loaded here through the asset protocol like the Quick Stitch preview
-// PNG. If nothing's been downloaded yet, falls back to a blank background -
-// the flight geometry (path, footprints, heatmap) still renders fine either way.
-const OFFLINE_BASEMAP_SOURCE_ID = "offline-basemap";
-const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
-
-let pmtilesProtocol: Protocol | null = null;
-function ensurePmtilesProtocolRegistered(): Protocol {
-  if (!pmtilesProtocol) {
-    pmtilesProtocol = new Protocol();
-    maplibregl.addProtocol("pmtiles", pmtilesProtocol.tile);
-  }
-  return pmtilesProtocol;
-}
-
-/** Reads tiles out of an in-memory copy of the archive instead of letting
- * `pmtiles` issue HTTP Range requests against Tauri's asset protocol -
- * that combination has known byte-serving issues in Tauri's custom-protocol
- * handler (https://github.com/orgs/tauri-apps/discussions/12243) and was
- * confirmed here too: a downloaded basemap "succeeded" but rendered as a
- * flat background with no vector tiles. A single whole-file GET through the
- * asset protocol is already proven to work in this app (the Quick Stitch
- * mosaic preview image uses the same `convertFileSrc` + `fetch` shape), so
- * this fetches once and serves tiles from the resulting buffer instead. */
-class BufferSource implements Source {
-  constructor(
-    private key: string,
-    private buffer: ArrayBuffer,
-  ) {}
-  getKey() {
-    return this.key;
-  }
-  async getBytes(offset: number, length: number): Promise<RangeResponse> {
-    return { data: this.buffer.slice(offset, offset + length) };
-  }
-}
-
-// Fallback when the offline basemap package isn't present (fresh clone that
-// hasn't run the fetch script yet) - a blank canvas so the flight geometry
-// (path, footprints, heatmap) still renders with zero network requests.
+// This map never loads the user-downloaded offline basemap (see
+// OfflineBasemapInfoCard/OfflineBasemapPreview) - that's previewed
+// separately, in its own small map instance, on hover. Always blank here so
+// the flight geometry (path, footprints, heatmap) still renders fine with
+// zero network requests.
 const BLANK_STYLE: StyleSpecification = {
   version: 8,
   sources: {},
   layers: [{ id: "background", type: "background", paint: { "background-color": "#eef1f2" } }],
 };
-
-function offlineBasemapStyle(key: string, maxZoom: number): StyleSpecification {
-  // Keep only fill/line/background layers - symbol (text/icon) layers need a
-  // glyphs/sprite service we don't bundle, and would otherwise just silently
-  // fail to render labels while still costing a style-parse warning.
-  const renderable = protomapsLayers(OFFLINE_BASEMAP_SOURCE_ID, LIGHT).filter(
-    (l) => l.type === "fill" || l.type === "line" || l.type === "background",
-  );
-  return {
-    version: 8,
-    sources: {
-      [OFFLINE_BASEMAP_SOURCE_ID]: {
-        type: "vector",
-        // Must match BufferSource's getKey() below exactly - the Protocol
-        // resolves this URL to the matching registered PMTiles instance
-        // rather than fetching it itself.
-        url: `pmtiles://${key}`,
-        attribution: OSM_ATTRIBUTION,
-        // Without this, MapLibre requests tiles at whatever zoom the camera
-        // reaches (e.g. after fitBounds on a small area) - the archive only
-        // has tiles up to the zoom it was downloaded at, pmtiles.Protocol
-        // does no overzoom fallback (looks up the exact z/x/y and returns
-        // nothing if absent), so those requests silently come back empty and
-        // only the background paint shows. Declaring maxzoom here tells
-        // MapLibre to stop requesting past it and instead overzoom
-        // (upscale) the last available tile client-side.
-        maxzoom: maxZoom,
-      },
-    },
-    layers: renderable,
-  } as StyleSpecification;
-}
-
-async function resolveBaseStyle(): Promise<{
-  style: StyleSpecification;
-  hasOfflineBasemap: boolean;
-  bbox: BasemapBbox | null;
-  maxZoom: number;
-}> {
-  try {
-    const info = await invoke<OfflineBasemapInfo | null>("get_offline_basemap_info");
-    if (info) {
-      const protocol = ensurePmtilesProtocolRegistered();
-      const res = await fetch(convertFileSrc(info.path));
-      if (!res.ok) throw new Error(`failed to read offline basemap file: ${res.status}`);
-      const buffer = await res.arrayBuffer();
-      protocol.add(new PMTiles(new BufferSource(info.path, buffer)));
-      return { style: offlineBasemapStyle(info.path, info.maxZoom), hasOfflineBasemap: true, bbox: info.bbox, maxZoom: info.maxZoom };
-    }
-  } catch {
-    // No offline basemap downloaded yet (or reading/parsing it failed) - fall back below.
-  }
-  return { style: BLANK_STYLE, hasOfflineBasemap: false, bbox: null, maxZoom: 0 };
-}
 
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as GeoFeature[] };
 
@@ -242,54 +142,13 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const loadedRef = useRef(false);
-  const attributionAddedRef = useRef(false);
 
   useImperativeHandle(ref, () => ({
     flyTo(lat, lon) {
       mapRef.current?.flyTo({ center: [lon, lat], zoom: 19, duration: 600 });
     },
-    async loadOfflineBasemap() {
-      const map = mapRef.current;
-      if (!map || !loadedRef.current) return false;
-
-      const { style, hasOfflineBasemap, bbox, maxZoom } = await resolveBaseStyle();
-      if (!hasOfflineBasemap) return false;
-
-      await new Promise<void>((resolve) => {
-        map.once("style.load", () => {
-          addBaseLayers(map);
-          applyData(map, result);
-          applyVisibility(map, visibility);
-          applyMosaic(map, stitchResult, mosaicOpacity, visibility);
-          resolve();
-        });
-        map.setStyle(style, { diff: false });
-      });
-
-      if (!attributionAddedRef.current) {
-        map.addControl(new maplibregl.AttributionControl(), "bottom-right");
-        attributionAddedRef.current = true;
-      }
-
-      // Fly to the downloaded area - without this the camera stays wherever
-      // it was (often [0, 0] zoom 2 if no scan has run yet), so the newly
-      // loaded tiles are technically on the map but nowhere near the view.
-      if (bbox) {
-        map.fitBounds(
-          [
-            [bbox.minLon, bbox.minLat],
-            [bbox.maxLon, bbox.maxLat],
-          ],
-          { padding: 40, duration: 600, maxZoom },
-        );
-      }
-      return true;
-    },
   }));
 
-  // Always starts blank - the offline basemap (if any is cached on disk) is
-  // only wired in when the user clicks "Show on map" in OfflineBasemapInfoCard
-  // (via loadOfflineBasemap above), never automatically on mount or download.
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -315,7 +174,6 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
       map.remove();
       mapRef.current = null;
       loadedRef.current = false;
-      attributionAddedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -228,10 +228,17 @@ body,
   gap: 4px;
   font-size: 11.5px;
   color: #94a3b8;
+  /* Without this, a grid/flex item defaults to min-width: auto, so an
+     <input>'s intrinsic minimum width can force the .offline-basemap-panel__grid
+     columns wider than the sidebar - the sidebar's overflow-y: auto makes
+     overflow-x compute to auto too, so that excess silently clips at the
+     sidebar's right edge instead of visibly overflowing. */
+  min-width: 0;
 }
 
 .stitch-field select,
 .stitch-field input {
+  width: 100%;
   background: #1f2937;
   color: #e2e8f0;
   border: 1px solid #334155;
@@ -284,8 +291,9 @@ body,
 
 .offline-basemap-panel__grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+  min-width: 0;
 }
 
 .offline-basemap-info {
@@ -304,22 +312,15 @@ body,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  text-align: left;
   background: #1f2937;
   border: 1px solid #334155;
   border-radius: 8px;
   padding: 10px 12px;
-  cursor: pointer;
-  transition: border-color 0.15s, background-color 0.15s;
+  transition: border-color 0.15s;
 }
 
-.offline-basemap-info__card:hover:not(:disabled) {
+.offline-basemap-info:hover .offline-basemap-info__card {
   border-color: #38bdf8;
-}
-
-.offline-basemap-info__card:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
 }
 
 .offline-basemap-info__bbox {
@@ -341,12 +342,68 @@ body,
   margin-top: 2px;
 }
 
-.offline-basemap-info__action--loaded {
-  color: #4ade80;
+.offline-basemap-info__popover {
+  position: fixed;
+  z-index: 50;
+  width: 280px;
+  height: 180px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  animation: offline-basemap-info__popover-in 0.1s ease-out;
 }
 
-.offline-basemap-info__action--error {
-  color: #f87171;
+.offline-basemap-info__popover::before {
+  /* The bubble's little pointer/arrow, aimed back at the card that triggered it. */
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: -7px;
+  width: 12px;
+  height: 12px;
+  background: #0f172a;
+  border-left: 1px solid #334155;
+  border-bottom: 1px solid #334155;
+  transform: rotate(45deg);
+}
+
+@keyframes offline-basemap-info__popover-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.offline-basemap-preview {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.offline-basemap-preview__map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.offline-basemap-preview__status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px;
+  font-size: 11.5px;
+  color: #94a3b8;
+  background: #0f172a;
 }
 
 .alert-panel {

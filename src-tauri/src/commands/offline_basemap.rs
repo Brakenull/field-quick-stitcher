@@ -167,7 +167,19 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
                 }
             };
             for attempt in 0..=FETCH_RETRIES {
-                match reader.get_tile(coord).await {
+                // get_tile_decompressed, not get_tile: the remote Protomaps
+                // build stores tiles gzip-compressed, and get_tile returns
+                // those raw compressed bytes as-is. PmTilesWriter::new(Mvt)
+                // defaults to gzip-compressing whatever it's given, so
+                // passing the still-compressed bytes through unchanged
+                // double-gzips them - the header ends up declaring a single
+                // gzip layer while the actual data has two, so every reader
+                // that decompresses once per the header gets back garbage
+                // and silently renders zero features (confirmed: the
+                // resulting archive "downloads fine" but every consumer -
+                // FlightMap's old live-swap and OfflineBasemapPreview alike -
+                // showed only the base style's background, no map data).
+                match reader.get_tile_decompressed(coord).await {
                     Ok(Some(bytes)) => {
                         let _ = tx.send((tile, bytes.to_vec())).await;
                         return;
@@ -265,7 +277,7 @@ mod tests {
         let mut failed = 0;
         for tile in &tiles {
             let coord = TileCoord::new(tile.z, tile.x, tile.y).expect("valid coord");
-            match reader.get_tile(coord).await {
+            match reader.get_tile_decompressed(coord).await {
                 Ok(Some(bytes)) => {
                     writer.add_tile(coord, &bytes).expect("add_tile");
                     written += 1;
