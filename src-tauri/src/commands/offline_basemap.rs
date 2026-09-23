@@ -18,11 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pmtiles::{AsyncPmTilesReader, PmTilesWriter, TileCoord, TileType};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, Semaphore};
 
 use crate::core::tile_math::{self, TileXY};
 use crate::models::offline_basemap::{BasemapBbox, OfflineBasemapInfo, OfflineBasemapProgress, OfflineBasemapStage};
+use crate::AppState;
 
 const FETCH_CONCURRENCY: usize = 12;
 const FETCH_RETRIES: u32 = 3;
@@ -36,8 +37,12 @@ const BASEMAP_TMP_FILENAME: &str = "basemap.pmtiles.tmp";
 const META_FILENAME: &str = "basemap.meta.json";
 
 fn basemap_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join(BASEMAP_DIR);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app-data directory: {e}"))?
+        .join(BASEMAP_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     Ok(dir)
 }
 
@@ -59,7 +64,23 @@ async fn find_latest_build(client: &reqwest::Client) -> Result<(String, String),
 /// Downloads every tile covering `bbox` up to `max_zoom` into a fresh local
 /// `.pmtiles` archive, replacing whatever basemap was previously downloaded.
 #[tauri::command]
-pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoom: u8) -> Result<OfflineBasemapInfo, String> {
+pub async fn download_offline_basemap(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bbox: BasemapBbox,
+    max_zoom: u8,
+) -> Result<OfflineBasemapInfo, String> {
+    // Guards the fixed tmp/final filenames below - two overlapping downloads
+    // would otherwise race on them (one's rename fails because the other
+    // already moved the file away). try_lock (not .lock().await): reject a
+    // second concurrent call outright rather than silently queuing it, since
+    // queuing would mean starting a whole redundant download only to have it
+    // immediately overwritten anyway (REPLACE semantics - one basemap total).
+    let _download_guard = state
+        .offline_basemap_download_lock
+        .try_lock()
+        .map_err(|_| "An offline map download is already in progress - wait for it to finish.".to_string())?;
+
     let tiles = tile_math::tiles_for_bbox(&bbox, max_zoom)?;
     if tiles.len() > MAX_TILES {
         return Err(format!(
@@ -85,7 +106,10 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
     // a 100+GB remote object - was observed timing out at 20s on a normal,
     // eventually-successful connection; this is a genuinely slow remote
     // source, not a hang, so the bound needs to be generous.
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
     let (build_url, source_build) = find_latest_build(&client).await?;
 
     // Opening the reader means range-reading a header/directory out of a
@@ -101,7 +125,7 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
         tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
         reader_result = AsyncPmTilesReader::new_with_url(client.clone(), &build_url).await;
     }
-    let reader = Arc::new(reader_result.map_err(|e| e.to_string())?);
+    let reader = Arc::new(reader_result.map_err(|e| format!("failed to open remote basemap reader at {build_url}: {e}"))?);
 
     let dir = basemap_dir(&app)?;
     let tmp_path = dir.join(BASEMAP_TMP_FILENAME);
@@ -119,19 +143,22 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
         let tmp_path = tmp_path.clone();
         let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-            let file = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+            let file = std::fs::File::create(&tmp_path)
+                .map_err(|e| format!("failed to create {}: {e}", tmp_path.display()))?;
             let mut writer = PmTilesWriter::new(TileType::Mvt)
                 .max_zoom(max_zoom)
                 .bounds(bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat)
                 .create(file)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("failed to initialize pmtiles writer: {e}"))?;
 
             let mut tiles_done: u32 = 0;
             let mut last_percent: u8 = 0;
             while let Some((tile, data)) = rx.blocking_recv() {
+                let coord = TileCoord::new(tile.z, tile.x, tile.y)
+                    .map_err(|e| format!("invalid tile coordinate {}/{}/{}: {e}", tile.z, tile.x, tile.y))?;
                 writer
-                    .add_tile(TileCoord::new(tile.z, tile.x, tile.y).map_err(|e| e.to_string())?, &data)
-                    .map_err(|e| e.to_string())?;
+                    .add_tile(coord, &data)
+                    .map_err(|e| format!("failed to write tile {}/{}/{} to archive: {e}", tile.z, tile.x, tile.y))?;
                 tiles_done += 1;
                 let percent = ((tiles_done as u64 * 100) / tiles_total.max(1) as u64) as u8;
                 if percent > last_percent || tiles_done == tiles_total {
@@ -142,7 +169,7 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
                     );
                 }
             }
-            writer.finalize().map_err(|e| e.to_string())?;
+            writer.finalize().map_err(|e| format!("failed to finalize pmtiles archive: {e}"))?;
             Ok(tiles_done)
         })
     };
@@ -199,10 +226,13 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
 
     while fetch_set.join_next().await.is_some() {}
 
-    let tiles_written = write_task.await.map_err(|e| e.to_string())??;
+    let tiles_written = write_task.await.map_err(|e| format!("writer task panicked: {e}"))??;
 
-    std::fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())?;
-    let size_bytes = std::fs::metadata(&final_path).map_err(|e| e.to_string())?.len();
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| format!("failed to move {} to {}: {e}", tmp_path.display(), final_path.display()))?;
+    let size_bytes = std::fs::metadata(&final_path)
+        .map_err(|e| format!("failed to stat {}: {e}", final_path.display()))?
+        .len();
 
     let info = OfflineBasemapInfo {
         path: final_path.to_string_lossy().to_string(),
@@ -215,16 +245,19 @@ pub async fn download_offline_basemap(app: AppHandle, bbox: BasemapBbox, max_zoo
         downloaded_at: chrono::Utc::now().to_rfc3339(),
     };
     write_meta(&meta_path, &info)?;
-    app.asset_protocol_scope().allow_file(&final_path).map_err(|e| e.to_string())?;
+    app.asset_protocol_scope()
+        .allow_file(&final_path)
+        .map_err(|e| format!("failed to grant asset-protocol access to {}: {e}", final_path.display()))?;
     emit_progress(OfflineBasemapStage::Finalizing, tiles_total, 100);
 
     Ok(info)
 }
 
 fn write_meta(path: &std::path::Path, info: &OfflineBasemapInfo) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(info).map_err(|e| e.to_string())?;
-    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    file.write_all(json.as_bytes()).map_err(|e| e.to_string())
+    let json = serde_json::to_string_pretty(info).map_err(|e| format!("failed to serialize basemap metadata: {e}"))?;
+    let mut file = std::fs::File::create(path).map_err(|e| format!("failed to create {}: {e}", path.display()))?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 /// Reads whatever basemap is currently on disk (if any) and re-grants the
@@ -237,12 +270,15 @@ pub fn get_offline_basemap_info(app: AppHandle) -> Result<Option<OfflineBasemapI
     if !meta_path.exists() {
         return Ok(None);
     }
-    let contents = std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
-    let info: OfflineBasemapInfo = serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+    let contents = std::fs::read_to_string(&meta_path).map_err(|e| format!("failed to read {}: {e}", meta_path.display()))?;
+    let info: OfflineBasemapInfo =
+        serde_json::from_str(&contents).map_err(|e| format!("failed to parse {}: {e}", meta_path.display()))?;
     if !std::path::Path::new(&info.path).exists() {
         return Ok(None);
     }
-    app.asset_protocol_scope().allow_file(&info.path).map_err(|e| e.to_string())?;
+    app.asset_protocol_scope()
+        .allow_file(&info.path)
+        .map_err(|e| format!("failed to grant asset-protocol access to {}: {e}", info.path))?;
     Ok(Some(info))
 }
 

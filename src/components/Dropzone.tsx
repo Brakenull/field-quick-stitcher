@@ -11,6 +11,17 @@ export function Dropzone({ disabled, onFolderSelected }: DropzoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
+  // App re-renders continuously while scanning (progress events), so a
+  // fresh onFolderSelected reference each render would otherwise sit in this
+  // effect's deps and make it unlisten+relisten repeatedly during a scan -
+  // a drop landing in that async teardown/re-registration gap could be
+  // delivered to both the outgoing and incoming listener, firing
+  // onFolderSelected twice for one physical drop (confirmed: this raced two
+  // concurrent download_offline_basemap calls onto the same fixed tmp
+  // filename). Routing through a ref keeps the listener registered exactly
+  // once for the component's lifetime instead.
+  const onFolderSelectedRef = useRef(onFolderSelected);
+  onFolderSelectedRef.current = onFolderSelected;
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -23,7 +34,7 @@ export function Dropzone({ disabled, onFolderSelected }: DropzoneProps) {
         } else if (event.payload.type === "drop") {
           setIsDragOver(false);
           if (!disabledRef.current && event.payload.paths.length > 0) {
-            onFolderSelected(event.payload.paths[0]);
+            onFolderSelectedRef.current(event.payload.paths[0]);
           }
         }
       })
@@ -31,7 +42,7 @@ export function Dropzone({ disabled, onFolderSelected }: DropzoneProps) {
         unlisten = fn;
       });
     return () => unlisten?.();
-  }, [onFolderSelected]);
+  }, []);
 
   async function browse() {
     const path = await open({ directory: true, multiple: false });

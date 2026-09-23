@@ -10,7 +10,7 @@ export function useFlightInspector() {
   const [error, setError] = useState<string | null>(null);
   const unlistenRef = useRef<null | (() => void)>(null);
 
-  const inspect = useCallback(async (path: string) => {
+  const inspect = useCallback(async (path: string): Promise<InspectionResult | null> => {
     setStatus("scanning");
     setProgress(0);
     setError(null);
@@ -24,9 +24,11 @@ export function useFlightInspector() {
       const inspection = await invoke<InspectionResult>("inspect_directory", { path });
       setResult(inspection);
       setStatus("done");
+      return inspection;
     } catch (err) {
       setError(String(err));
       setStatus("error");
+      return null;
     } finally {
       unlistenRef.current?.();
       unlistenRef.current = null;

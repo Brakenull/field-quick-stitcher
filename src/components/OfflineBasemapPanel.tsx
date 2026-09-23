@@ -1,11 +1,11 @@
 import { useState } from "react";
-import type { BasemapBbox, OfflineBasemapProgress, OfflineBasemapStatus } from "../types/flight";
+import type { BasemapBbox, OfflineBasemapInfo, OfflineBasemapProgress, OfflineBasemapStatus } from "../types/flight";
 
 interface OfflineBasemapPanelProps {
   status: OfflineBasemapStatus;
   progress: OfflineBasemapProgress;
   error: string | null;
-  download: (bbox: BasemapBbox, maxZoom: number) => Promise<void>;
+  download: (bbox: BasemapBbox, maxZoom: number) => Promise<OfflineBasemapInfo | null>;
 }
 
 const STAGE_LABELS: Record<OfflineBasemapProgress["stage"], string> = {

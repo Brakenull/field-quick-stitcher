@@ -22,6 +22,13 @@ pub struct AppState {
     /// Result of the most recent `inspect_directory` scan, kept around so
     /// `export_report` can write it out without re-sending the whole payload over IPC.
     pub last_inspection: Mutex<Option<InspectionResult>>,
+    /// Serializes `download_offline_basemap` calls - it writes to a single
+    /// fixed tmp/final filename (REPLACE semantics: one basemap at a time),
+    /// so two overlapping downloads race on the same path and one's rename
+    /// fails because the other already moved it away. Held only for the
+    /// duration of one download; a second caller gets a clear "already in
+    /// progress" error instead of that race.
+    pub offline_basemap_download_lock: tokio::sync::Mutex<()>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +39,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             last_inspection: Mutex::new(None),
+            offline_basemap_download_lock: tokio::sync::Mutex::new(()),
         })
         .invoke_handler(tauri::generate_handler![
             inspect_directory,

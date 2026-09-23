@@ -45,13 +45,20 @@ class BufferSource implements Source {
   }
 }
 
-function offlineBasemapStyle(key: string, maxZoom: number): StyleSpecification {
-  // Keep only fill/line/background layers - symbol (text/icon) layers need a
-  // glyphs/sprite service we don't bundle, and would otherwise just silently
-  // fail to render labels while still costing a style-parse warning.
-  const renderable = protomapsLayers(OFFLINE_BASEMAP_SOURCE_ID, LIGHT).filter(
-    (l) => l.type === "fill" || l.type === "line" || l.type === "background",
-  );
+function offlineBasemapStyle(key: string, maxZoom: number, bbox: BasemapBbox): StyleSpecification {
+  // Only fill/line layers - both:
+  // - "background"-type layers deliberately excluded: unlike fill/line, a
+  //   background layer doesn't read from any source at all, so it paints one
+  //   flat color across the *entire* viewport regardless of zoom or where
+  //   real tile data exists. Keeping it made a single small downloaded area
+  //   look like full worldwide coverage once zoomed out far enough to see
+  //   past it - it's not real map data out there, just a flat fill. Our own
+  //   single neutral background layer below replaces it, honestly, the same
+  //   color everywhere whether or not that area was actually downloaded.
+  // - symbol (text/icon) layers excluded too: they need a glyphs/sprite
+  //   service we don't bundle, and would otherwise just silently fail to
+  //   render labels while still costing a style-parse warning.
+  const renderable = protomapsLayers(OFFLINE_BASEMAP_SOURCE_ID, LIGHT).filter((l) => l.type === "fill" || l.type === "line");
   return {
     version: 8,
     sources: {
@@ -62,6 +69,9 @@ function offlineBasemapStyle(key: string, maxZoom: number): StyleSpecification {
         // rather than fetching it itself.
         url: `pmtiles://${key}`,
         attribution: OSM_ATTRIBUTION,
+        // Tells MapLibre the archive only has data in this area, so it
+        // doesn't bother requesting tiles anywhere outside it.
+        bounds: [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat],
         // Without this, MapLibre requests tiles at whatever zoom the camera
         // reaches - the archive only has tiles up to the zoom it was
         // downloaded at, pmtiles.Protocol does no overzoom fallback (looks up
@@ -72,7 +82,10 @@ function offlineBasemapStyle(key: string, maxZoom: number): StyleSpecification {
         maxzoom: maxZoom,
       },
     },
-    layers: renderable,
+    layers: [
+      { id: "background", type: "background", paint: { "background-color": "#eef1f2" } },
+      ...renderable,
+    ],
   } as StyleSpecification;
 }
 
@@ -94,5 +107,5 @@ export async function loadOfflineBasemapStyle(): Promise<ResolvedOfflineBasemap 
   const buffer = await res.arrayBuffer();
   protocol.add(new PMTiles(new BufferSource(info.path, buffer)));
 
-  return { style: offlineBasemapStyle(info.path, info.maxZoom), bbox: info.bbox, maxZoom: info.maxZoom };
+  return { style: offlineBasemapStyle(info.path, info.maxZoom, info.bbox), bbox: info.bbox, maxZoom: info.maxZoom };
 }

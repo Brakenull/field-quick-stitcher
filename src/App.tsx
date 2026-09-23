@@ -10,8 +10,15 @@ import { FlightMap, type FlightMapHandle } from "./components/FlightMap";
 import { useFlightInspector } from "./hooks/useFlightInspector";
 import { useQuickStitch } from "./hooks/useQuickStitch";
 import { useOfflineBasemap } from "./hooks/useOfflineBasemap";
-import type { NeighborCap, StitchBackend, StitchStage } from "./types/flight";
+import { checkInternetConnection } from "./lib/network";
+import { bboxOfPhotos } from "./lib/flightBbox";
+import type { InspectionResult, NeighborCap, StitchBackend, StitchStage } from "./types/flight";
 import "./App.css";
+
+// Matches OfflineBasemapPanel's own manual-entry default - a reasonable
+// street-ish level of detail without the user having to pick one themselves
+// for this automatic, no-dialog download.
+const AUTO_DOWNLOAD_MAX_ZOOM = 12;
 
 const STITCH_STAGE_ORDER: StitchStage[] = [
   "downsampling",
@@ -51,15 +58,52 @@ function App() {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [stitchBackend, setStitchBackend] = useState<StitchBackend>("onnx");
   const [neighborCap, setNeighborCap] = useState<NeighborCap>("capped");
+  const [mapDataNotice, setMapDataNotice] = useState<string | null>(null);
+  const [mapDownloadNotice, setMapDownloadNotice] = useState<string | null>(null);
   const mapRef = useRef<FlightMapHandle>(null);
+
+  // Inspect itself is a purely local EXIF scan - it needs neither internet
+  // nor a map. This is about the *next* step: heading out to fly (or fly
+  // back to a gap), which is a lot easier with an offline map already on
+  // disk. So once the scan resolves the survey's actual GPS bbox, opportunistically
+  // grab a fresh one for that exact area while a connection is available, or
+  // flag it if there's neither a connection nor one already cached.
+  async function ensureOfflineMapCoverage(inspection: InspectionResult) {
+    const online = await checkInternetConnection();
+    if (online) {
+      const bbox = bboxOfPhotos(inspection.photos);
+      if (bbox) {
+        const downloaded = await offlineBasemap.download(bbox, AUTO_DOWNLOAD_MAX_ZOOM);
+        if (downloaded) {
+          setMapDownloadNotice(
+            `Offline map downloaded for this flight area (zoom ${downloaded.maxZoom}, ${(downloaded.sizeBytes / (1024 * 1024)).toFixed(1)}MB).`,
+          );
+          // Loads it under the flight path/footprints/heatmap the user is
+          // already looking at - safe to do unconditionally here (unlike a
+          // stale previously-cached basemap) since this one was just
+          // downloaded for this exact flight's own bbox.
+          await mapRef.current?.loadOfflineBasemap();
+        }
+      }
+    } else if (!offlineBasemap.info) {
+      setMapDataNotice(
+        "You're offline and don't have any offline map data downloaded yet - inspection results will show without map context until you're back online.",
+      );
+    }
+  }
 
   async function handleInspect(path: string) {
     stitchState.reset();
-    await inspect(path);
+    setMapDataNotice(null);
+    setMapDownloadNotice(null);
+    const inspection = await inspect(path);
+    if (inspection) await ensureOfflineMapCoverage(inspection);
   }
 
   function handleReset() {
     stitchState.reset();
+    setMapDataNotice(null);
+    setMapDownloadNotice(null);
     reset();
   }
 
@@ -140,8 +184,19 @@ function App() {
 
             {status === "error" && error && <p className="error-banner">{error}</p>}
 
+            {mapDataNotice && <p className="warning-banner">{mapDataNotice}</p>}
+
             {status === "done" && result && (
               <>
+                {offlineBasemap.status === "downloading" && (
+                  <p className="export-status">
+                    Downloading offline map for this flight area ({offlineBasemap.progress.percent}%)...
+                  </p>
+                )}
+                {offlineBasemap.status === "error" && offlineBasemap.error && (
+                  <p className="warning-banner">Couldn't download an offline map for this area: {offlineBasemap.error}</p>
+                )}
+                {mapDownloadNotice && <p className="success-banner">{mapDownloadNotice}</p>}
                 <MetricsBar metrics={result.metrics} />
                 <LayerControl
                   visibility={visibility}

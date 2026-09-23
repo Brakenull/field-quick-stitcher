@@ -3,11 +3,20 @@ import * as maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { loadOfflineBasemapStyle } from "../lib/offlineBasemapStyle";
 import type { GeoFeature, InspectionResult, StitchResult } from "../types/flight";
 import type { LayerVisibility } from "./LayerControl";
 
 export interface FlightMapHandle {
   flyTo: (lat: number, lon: number) => void;
+  /** Swaps in whatever offline basemap is currently on disk under the flight
+   * geometry - called once the auto-download tied to an Inspect scan
+   * completes (see App.tsx's ensureOfflineMapCoverage), so the map the user
+   * is already looking at gets filled in instead of staying blank. Doesn't
+   * move the camera - the result-driven fitBounds effect already put it over
+   * the flight area, which is the same area this basemap was downloaded for.
+   * Resolves false if nothing's downloaded (or it failed to load). */
+  loadOfflineBasemap: () => Promise<boolean>;
 }
 
 interface FlightMapProps {
@@ -20,11 +29,9 @@ interface FlightMapProps {
 const MOSAIC_SOURCE_ID = "mosaic";
 const MOSAIC_LAYER_ID = "mosaic-layer";
 
-// This map never loads the user-downloaded offline basemap (see
-// OfflineBasemapInfoCard/OfflineBasemapPreview) - that's previewed
-// separately, in its own small map instance, on hover. Always blank here so
-// the flight geometry (path, footprints, heatmap) still renders fine with
-// zero network requests.
+// Starting style before any offline basemap is loaded (or if none is ever
+// downloaded) - the flight geometry (path, footprints, heatmap) still
+// renders fine on top of this with zero network requests.
 const BLANK_STYLE: StyleSpecification = {
   version: 8,
   sources: {},
@@ -142,10 +149,35 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const loadedRef = useRef(false);
+  const attributionAddedRef = useRef(false);
 
   useImperativeHandle(ref, () => ({
     flyTo(lat, lon) {
       mapRef.current?.flyTo({ center: [lon, lat], zoom: 19, duration: 600 });
+    },
+    async loadOfflineBasemap() {
+      const map = mapRef.current;
+      if (!map || !loadedRef.current) return false;
+
+      const resolved = await loadOfflineBasemapStyle();
+      if (!resolved) return false;
+
+      await new Promise<void>((resolve) => {
+        map.once("style.load", () => {
+          addBaseLayers(map);
+          applyData(map, result);
+          applyVisibility(map, visibility);
+          applyMosaic(map, stitchResult, mosaicOpacity, visibility);
+          resolve();
+        });
+        map.setStyle(resolved.style, { diff: false });
+      });
+
+      if (!attributionAddedRef.current) {
+        map.addControl(new maplibregl.AttributionControl(), "bottom-right");
+        attributionAddedRef.current = true;
+      }
+      return true;
     },
   }));
 
@@ -174,6 +206,7 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
       map.remove();
       mapRef.current = null;
       loadedRef.current = false;
+      attributionAddedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
