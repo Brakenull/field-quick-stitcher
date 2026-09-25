@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 1.0.0 were never tagged or released. They were reconstructed from the commit history: a feature commit bumps the minor version, and a fix commit bumps the patch version.
 
+## [1.1.0] - 2026-09-25
+
+Offline maps are now faster and more reliable to download, and the main map keeps you inside the area you actually downloaded.
+
+### Added
+
+- While an offline basemap is shown, the map camera is locked to its downloaded area. You can no longer pan or zoom out past the edge into blank background. The zoom-out limit follows window resizes.
+- A short "You've reached the edge of the offline map" message appears when you try to zoom out or drag past that edge.
+- Auto-downloaded basemaps are shaped to the map panel's proportions, so locking the camera never crops the flight overview.
+- Re-inspecting a flight that the downloaded basemap already covers (at zoom 12 or more, with no failed tiles) reuses it instantly, with no download and no network check.
+
+### Changed
+
+- Offline maps now come from the hosted **Protomaps tile API** instead of range-reading Protomaps' daily planet build. The same survey that took anywhere from 3 to 80 seconds to download now takes about 1–4 seconds.
+- Tiles are fetched 32 at a time (up from 12), and retries back off exponentially.
+- The download progress's first stage is now "Connecting to Protomaps". This step also checks the API key, so a bad key fails right away with the API's own message.
+- The main map shows a basemap only while an inspected folder's results are on screen. Starting a new scan or choosing "Scan another card" returns it to the plain background and removes the map attribution. Downloaded maps are still viewable any time from the **Download map** tab's preview.
+- A download that finishes after you've reset or started a newer scan no longer puts its map or message on screen for the wrong flight.
+
+### Fixed
+
+- Slow but still-progressing tile requests were cancelled by a tight timeout and could be dropped from the downloaded map. Requests now time out only after 20 seconds with no data at all.
+
+### For developers
+
+- Building the app now needs a Protomaps API key as `PROTOMAP_KEY` in the repo-root `.env` (see `.env.example`). It is embedded into the binary at build time, and a `PROTOMAP_KEY` environment variable overrides it. Without a key, everything except map downloads still works, and the build prints a warning.
+- New ignored benchmark, `basemap_download_bench`, times a real survey's basemap download.
+
+### Known limitations
+
+- The Protomaps API is free for non-commercial use only.
+
 ## [1.0.0] - 2026-09-25
 
 The first public release of Field Stitch, a desktop app for checking drone photo surveys while you're still in the field. Point it at a memory card and it tells you, before you pack up, whether the flight covered the whole area, which shots are blurry, and where to fly back to. It can also stitch a quick georeferenced mosaic from the same photos, and it keeps working without an internet connection.
@@ -228,6 +260,7 @@ The first public release of Field Stitch, a desktop app for checking drone photo
 
 - Project scaffold: Tauri 2, React 19 and TypeScript.
 
+[1.1.0]: https://github.com/Brakenull/field-quick-stitcher/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Brakenull/field-quick-stitcher/compare/93b7317...v1.0.0
 [0.10.0]: https://github.com/Brakenull/field-quick-stitcher/compare/23034bb...93b7317
 [0.9.1]: https://github.com/Brakenull/field-quick-stitcher/compare/7e907e9...23034bb
