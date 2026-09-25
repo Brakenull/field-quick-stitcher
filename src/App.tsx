@@ -13,7 +13,7 @@ import { useFlightInspector } from "./hooks/useFlightInspector";
 import { useQuickStitch } from "./hooks/useQuickStitch";
 import { useOfflineBasemap } from "./hooks/useOfflineBasemap";
 import { checkInternetConnection } from "./lib/network";
-import { bboxContains, bboxOfPhotos } from "./lib/flightBbox";
+import { bboxContains, bboxOfPhotos, fitBboxToAspect } from "./lib/flightBbox";
 import type { InspectionResult, NeighborCap, OfflineBasemapInfo, StitchBackend, StitchStage } from "./types/flight";
 import "@fontsource-variable/inter";
 import "@fontsource/fira-code/400.css";
@@ -113,7 +113,14 @@ function App() {
     if (!isCurrent()) return;
     if (online) {
       if (bbox) {
-        const downloaded = await offlineBasemap.download(bbox, AUTO_DOWNLOAD_MAX_ZOOM);
+        // Download a little more than the flight needs: shaped to the map
+        // panel, since FlightMap locks the camera inside the basemap and a
+        // mismatched shape would crop the flight overview. The coverage check
+        // above deliberately uses the unshaped bbox, so resizing the window
+        // doesn't invalidate an otherwise-covering cache.
+        const viewport = mapRef.current?.getViewportSize();
+        const downloadBbox = viewport ? fitBboxToAspect(bbox, viewport.width, viewport.height) : bbox;
+        const downloaded = await offlineBasemap.download(downloadBbox, AUTO_DOWNLOAD_MAX_ZOOM);
         // The download itself still finishes (and replaces the cache) after
         // a reset or a newer scan - only showing it is skipped.
         if (downloaded && isCurrent()) {

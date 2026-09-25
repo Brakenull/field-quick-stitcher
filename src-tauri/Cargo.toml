@@ -1,6 +1,6 @@
 [package]
 name = "field-stitch"
-version = "1.0.0"
+version = "1.1.0"
 description = "A desktop app for checking drone photo surveys while you're still in the field"
 authors = ["you"]
 edition = "2021"

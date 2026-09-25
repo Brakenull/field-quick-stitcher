@@ -828,3 +828,36 @@ button.alert-item:hover {
     transform: none;
   }
 }
+
+/* ---------- Map toast (edge of the offline map) ---------- */
+
+/* A floating info Notice over the map rather than a new component: same
+   left-border-plus-icon language as the sidebar notices, lifted onto the map
+   with the elevated shadow. Pointer-transparent so it never blocks the drag
+   or scroll that triggered it. */
+.map-toast {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-6);
+  transform: translateX(-50%);
+  z-index: 2;
+  width: max-content;
+  max-width: min(360px, calc(100% - 2 * var(--space-4)));
+  pointer-events: none;
+}
+
+.map-toast .notice {
+  box-shadow: var(--shadow-elevated);
+  animation-name: map-toast-in;
+}
+
+@keyframes map-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

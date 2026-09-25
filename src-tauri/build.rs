@@ -15,10 +15,14 @@ fn main() {
 /// command then errors with a clear message instead of failing to compile.
 fn embed_protomaps_key() {
     println!("cargo:rerun-if-env-changed=PROTOMAP_KEY");
+    // Watched unconditionally, even while the file doesn't exist: watching it
+    // only when present meant a build made before `.env` was created cached a
+    // key-less result that cargo never re-ran once `.env` appeared (it had
+    // nothing to watch). A missing watched path makes cargo re-run this
+    // script on every build instead - fine, since it's cheap, and it keeps
+    // doing so only until `.env` is created.
+    println!("cargo:rerun-if-changed=../.env");
     let env_path = PathBuf::from("../.env");
-    if env_path.exists() {
-        println!("cargo:rerun-if-changed=../.env");
-    }
 
     let key = env::var("PROTOMAP_KEY").ok().filter(|k| !k.trim().is_empty()).or_else(|| {
         let contents = fs::read_to_string(&env_path).ok()?;
@@ -27,8 +31,11 @@ fn embed_protomaps_key() {
             (name.trim() == "PROTOMAP_KEY").then(|| value.trim().trim_matches('"').trim_matches('\'').to_string())
         })
     });
-    if let Some(key) = key.filter(|k| !k.is_empty()) {
-        println!("cargo:rustc-env=PROTOMAP_KEY={key}");
+    match key.filter(|k| !k.is_empty()) {
+        Some(key) => println!("cargo:rustc-env=PROTOMAP_KEY={key}"),
+        None => println!(
+            "cargo:warning=No PROTOMAP_KEY found (repo-root .env or env var) - offline map downloads will fail until one is set. See .env.example."
+        ),
     }
 }
 

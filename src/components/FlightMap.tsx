@@ -4,11 +4,16 @@ import type { StyleSpecification } from "maplibre-gl";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { loadOfflineBasemapStyle } from "../lib/offlineBasemapStyle";
-import type { GeoFeature, InspectionResult, OfflineBasemapInfo, StitchResult } from "../types/flight";
+import type { BasemapBbox, GeoFeature, InspectionResult, OfflineBasemapInfo, StitchResult } from "../types/flight";
+import { Notice } from "./Notice";
 import type { LayerVisibility } from "./LayerControl";
 
 export interface FlightMapHandle {
   flyTo: (lat: number, lon: number) => void;
+  /** The map panel's current size in CSS px (null before layout). App uses
+   * it to shape auto-downloaded basemaps to the panel's aspect ratio - see
+   * fitBboxToAspect in lib/flightBbox.ts. */
+  getViewportSize: () => { width: number; height: number } | null;
 }
 
 interface FlightMapProps {
@@ -28,6 +33,8 @@ interface FlightMapProps {
 
 const MOSAIC_SOURCE_ID = "mosaic";
 const MOSAIC_LAYER_ID = "mosaic-layer";
+/** How long the "edge of the offline map" toast stays up after the last hit. */
+const EDGE_TOAST_MS = 2500;
 
 // Starting style before any offline basemap is loaded (or if none is ever
 // downloaded) - the flight geometry (path, footprints, heatmap) still
@@ -161,10 +168,30 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
   // Which basemap the map currently shows ("" = BLANK_STYLE), so a prop
   // change resolving to the same one doesn't trigger a pointless swap.
   const shownBasemapKeyRef = useRef("");
+  // The offline basemap's extent while one is shown - the camera is locked
+  // inside it (see applyBasemapBounds), and the edge toast only fires then.
+  const boundsLockRef = useRef<BasemapBbox | null>(null);
+  const [edgeToastVisible, setEdgeToastVisible] = useState(false);
+  const edgeToastTimerRef = useRef<number | undefined>(undefined);
+
+  function notifyEdgeReached() {
+    setEdgeToastVisible(true);
+    window.clearTimeout(edgeToastTimerRef.current);
+    edgeToastTimerRef.current = window.setTimeout(() => setEdgeToastVisible(false), EDGE_TOAST_MS);
+  }
+  // Read by map event handlers registered once at init.
+  const notifyEdgeReachedRef = useRef(notifyEdgeReached);
+  notifyEdgeReachedRef.current = notifyEdgeReached;
 
   useImperativeHandle(ref, () => ({
     flyTo(lat, lon) {
       mapRef.current?.flyTo({ center: [lon, lat], zoom: 19, duration: 600 });
+    },
+    getViewportSize() {
+      const container = mapRef.current?.getContainer();
+      return container && container.clientWidth > 0 && container.clientHeight > 0
+        ? { width: container.clientWidth, height: container.clientHeight }
+        : null;
     },
   }));
 
@@ -188,14 +215,55 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
       setMapLoaded(true);
     });
 
+    // Edge detection while the camera is locked to the basemap. The lock
+    // itself silently absorbs the gesture, so without these the user just
+    // sees the map stop responding.
+    const atMinZoom = () => map.getZoom() <= map.getMinZoom() + 0.01;
+    map.on("wheel", (e) => {
+      if (boundsLockRef.current && e.originalEvent.deltaY > 0 && atMinZoom()) notifyEdgeReachedRef.current();
+    });
+    // Dragging into an edge: the pointer keeps moving but the map (clamped
+    // by maxBounds) moves much less than it along that axis.
+    let lastDragCenter: maplibregl.LngLat | null = null;
+    map.on("dragstart", () => {
+      lastDragCenter = map.getCenter();
+    });
+    map.on("drag", (e) => {
+      const center = map.getCenter();
+      const prev = lastDragCenter;
+      lastDragCenter = center;
+      const pointer = e.originalEvent as MouseEvent | undefined;
+      if (!boundsLockRef.current || !prev || !pointer || typeof pointer.movementX !== "number") return;
+      const moved = map.project(prev);
+      const now = map.project(center);
+      const blocked = (pointerDelta: number, mapDelta: number) =>
+        Math.abs(pointerDelta) > 2 && Math.abs(mapDelta) < Math.abs(pointerDelta) / 2;
+      if (blocked(pointer.movementX, moved.x - now.x) || blocked(pointer.movementY, moved.y - now.y)) {
+        notifyEdgeReachedRef.current();
+      }
+    });
+    const container = containerRef.current;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (boundsLockRef.current && (e.key === "-" || e.key === "_") && atMinZoom()) notifyEdgeReachedRef.current();
+    };
+    container.addEventListener("keydown", onKeyDown);
+    // The lowest zoom that still fits inside the basemap depends on the
+    // panel's size, so it has to follow window resizes.
+    map.on("resize", () => {
+      if (boundsLockRef.current) map.setMinZoom(coverZoom(map, boundsLockRef.current));
+    });
+
     mapRef.current = map;
 
     return () => {
+      container.removeEventListener("keydown", onKeyDown);
+      window.clearTimeout(edgeToastTimerRef.current);
       map.remove();
       mapRef.current = null;
       loadedRef.current = false;
       attributionRef.current = null;
       shownBasemapKeyRef.current = "";
+      boundsLockRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -227,6 +295,8 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
       });
       map.setStyle(style, { diff: false });
       shownBasemapKeyRef.current = basemapKey;
+      applyBasemapBounds(map, basemap);
+      if (!basemap) setEdgeToastVisible(false);
 
       // Attribution only while real third-party map data is on screen.
       if (basemapKey && !attributionRef.current) {
@@ -241,7 +311,29 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
     return () => {
       cancelled = true;
     };
+    // `basemap` is fully identified by basemapKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basemapKey, mapLoaded]);
+
+  /** Locks the camera inside the basemap's extent (or unlocks it for null),
+   * so the user can never pan or zoom out past the downloaded data into
+   * blank background. maxBounds does the clamping; minZoom is set to the
+   * matching zoom too, so the zoom-out button disables itself at the limit
+   * and the wheel handler above can tell the limit was hit. */
+  function applyBasemapBounds(map: maplibregl.Map, info: OfflineBasemapInfo | null) {
+    boundsLockRef.current = info?.bbox ?? null;
+    if (!info) {
+      map.setMaxBounds(null);
+      map.setMinZoom(null);
+      return;
+    }
+    const { minLon, minLat, maxLon, maxLat } = info.bbox;
+    map.setMinZoom(coverZoom(map, info.bbox));
+    map.setMaxBounds([
+      [minLon, minLat],
+      [maxLon, maxLat],
+    ]);
+  }
 
   useEffect(() => {
     const map = mapRef.current;
@@ -273,8 +365,32 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
     map.setLayoutProperty(MOSAIC_LAYER_ID, "visibility", visibility.mosaic ? "visible" : "none");
   }, [mosaicOpacity, visibility.mosaic]);
 
-  return <div ref={containerRef} className="flight-map" />;
+  return (
+    <>
+      <div ref={containerRef} className="flight-map" />
+      {edgeToastVisible && (
+        <div className="map-toast">
+          <Notice variant="info">You've reached the edge of the offline map.</Notice>
+        </div>
+      )}
+    </>
+  );
 });
+
+/** Web Mercator tile size MapLibre uses for its world size (512 * 2^zoom px). */
+const MERCATOR_TILE_PX = 512;
+
+/** The lowest zoom at which the map's viewport still fits entirely inside
+ * `bbox` - "cover", not "contain": at any lower zoom some of the viewport
+ * would fall outside the downloaded data. */
+function coverZoom(map: maplibregl.Map, bbox: BasemapBbox): number {
+  const container = map.getContainer();
+  const nw = maplibregl.MercatorCoordinate.fromLngLat([bbox.minLon, bbox.maxLat]);
+  const se = maplibregl.MercatorCoordinate.fromLngLat([bbox.maxLon, bbox.minLat]);
+  const zoomForWidth = Math.log2(container.clientWidth / (MERCATOR_TILE_PX * (se.x - nw.x)));
+  const zoomForHeight = Math.log2(container.clientHeight / (MERCATOR_TILE_PX * (se.y - nw.y)));
+  return Math.max(zoomForWidth, zoomForHeight, 0);
+}
 
 function applyData(map: maplibregl.Map, result: InspectionResult | null) {
   const flightSource = map.getSource("flight") as maplibregl.GeoJSONSource | undefined;
