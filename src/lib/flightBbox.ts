@@ -35,3 +35,14 @@ export function bboxOfPhotos(photos: PhotoMeta[]): BasemapBbox | null {
     maxLat: Math.min(maxLat + latPad, 85.06),
   };
 }
+
+/** Whether `outer` fully contains `inner` - used to decide an already
+ * downloaded offline basemap still covers a new flight's area. */
+export function bboxContains(outer: BasemapBbox, inner: BasemapBbox): boolean {
+  return (
+    outer.minLon <= inner.minLon &&
+    outer.minLat <= inner.minLat &&
+    outer.maxLon >= inner.maxLon &&
+    outer.maxLat >= inner.maxLat
+  );
+}

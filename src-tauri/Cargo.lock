@@ -1402,6 +1402,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "field-stitch"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "factrs",
+ "image",
+ "kamadak-exif",
+ "ndarray",
+ "opencv",
+ "ort",
+ "pmtiles",
+ "printpdf",
+ "rayon",
+ "reqwest",
+ "rstar",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tempfile",
+ "tiff",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2900,35 +2929,6 @@ dependencies = [
  "objc2-foundation",
  "time",
  "uuid",
-]
-
-[[package]]
-name = "main"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "factrs",
- "image",
- "kamadak-exif",
- "ndarray",
- "opencv",
- "ort",
- "pmtiles",
- "printpdf",
- "rayon",
- "reqwest",
- "rstar",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tempfile",
- "tiff",
- "tokio",
- "walkdir",
 ]
 
 [[package]]

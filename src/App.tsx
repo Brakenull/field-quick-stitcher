@@ -13,7 +13,7 @@ import { useFlightInspector } from "./hooks/useFlightInspector";
 import { useQuickStitch } from "./hooks/useQuickStitch";
 import { useOfflineBasemap } from "./hooks/useOfflineBasemap";
 import { checkInternetConnection } from "./lib/network";
-import { bboxOfPhotos } from "./lib/flightBbox";
+import { bboxContains, bboxOfPhotos } from "./lib/flightBbox";
 import type { InspectionResult, NeighborCap, StitchBackend, StitchStage } from "./types/flight";
 import "@fontsource-variable/inter";
 import "@fontsource/fira-code/400.css";
@@ -78,9 +78,30 @@ function App() {
   // grab a fresh one for that exact area while a connection is available, or
   // flag it if there's neither a connection nor one already cached.
   async function ensureOfflineMapCoverage(inspection: InspectionResult) {
+    const bbox = bboxOfPhotos(inspection.photos);
+
+    // Re-downloading is pointless (and the slowest part of this whole flow)
+    // when the basemap already on disk covers this flight at the zoom we'd
+    // fetch anyway - e.g. re-scanning the same card, or a second flight over
+    // the same area. A partial download (some tiles failed) doesn't count, so
+    // it gets another chance to fill in. Checked before the connectivity
+    // probe, since this path needs no network at all.
+    const cached = offlineBasemap.info;
+    if (
+      bbox &&
+      cached &&
+      cached.tilesFailed === 0 &&
+      cached.maxZoom >= AUTO_DOWNLOAD_MAX_ZOOM &&
+      bboxContains(cached.bbox, bbox)
+    ) {
+      if (await mapRef.current?.loadOfflineBasemap()) {
+        setMapDownloadNotice("Using the offline map already downloaded for this area.");
+      }
+      return;
+    }
+
     const online = await checkInternetConnection();
     if (online) {
-      const bbox = bboxOfPhotos(inspection.photos);
       if (bbox) {
         const downloaded = await offlineBasemap.download(bbox, AUTO_DOWNLOAD_MAX_ZOOM);
         if (downloaded) {
