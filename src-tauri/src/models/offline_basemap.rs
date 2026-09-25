@@ -13,12 +13,12 @@ pub struct BasemapBbox {
 
 /// One step of `download_offline_basemap`, in the order it actually runs -
 /// mirrors `StitchStage`'s reasoning: the UI needs to show which phase is
-/// running (locating a build can itself take a few seconds of HEAD probing)
+/// running (connecting also validates the API key with a first tile fetch)
 /// rather than a bar that sits at 0% while nothing visibly happens.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OfflineBasemapStage {
-    LocatingBuild,
+    Connecting,
     DownloadingTiles,
     Finalizing,
 }
@@ -46,7 +46,9 @@ pub struct OfflineBasemapInfo {
     pub tile_count: u32,
     pub tiles_failed: u32,
     pub size_bytes: u64,
-    /// The Protomaps daily build date (`YYYYMMDD`) the tiles were pulled from.
+    /// Where the tiles came from: `protomaps-api-v4` for the hosted Protomaps
+    /// API; basemaps downloaded before the API switch carry the daily-build
+    /// date (`YYYYMMDD`) they were range-read from instead.
     pub source_build: String,
     /// RFC3339 timestamp of when the download finished.
     pub downloaded_at: String,

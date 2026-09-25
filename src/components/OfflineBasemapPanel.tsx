@@ -11,7 +11,7 @@ interface OfflineBasemapPanelProps {
 }
 
 const STAGE_LABELS: Record<OfflineBasemapProgress["stage"], string> = {
-  "locating-build": "Locating latest map build",
+  connecting: "Connecting to Protomaps",
   "downloading-tiles": "Downloading tiles",
   finalizing: "Finalizing",
 };

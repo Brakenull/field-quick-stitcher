@@ -89,7 +89,6 @@ dependencies = [
  "compression-codecs",
  "compression-core",
  "pin-project-lite",
- "tokio",
 ]
 
 [[package]]
@@ -3929,9 +3928,7 @@ dependencies = [
  "countio",
  "fast_hilbert",
  "flate2",
- "reqwest",
  "thiserror 2.0.20",
- "tokio",
  "twox-hash",
  "varint-rs",
 ]

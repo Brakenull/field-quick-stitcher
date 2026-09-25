@@ -1,4 +1,4 @@
-const PROBE_URL = "https://build.protomaps.com/";
+const PROBE_URL = "https://api.protomaps.com/";
 const PROBE_TIMEOUT_MS = 4000;
 
 /** Quick reachability probe against the same host the offline-map downloader

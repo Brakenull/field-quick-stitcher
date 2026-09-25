@@ -1,22 +1,14 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { loadOfflineBasemapStyle } from "../lib/offlineBasemapStyle";
-import type { GeoFeature, InspectionResult, StitchResult } from "../types/flight";
+import type { GeoFeature, InspectionResult, OfflineBasemapInfo, StitchResult } from "../types/flight";
 import type { LayerVisibility } from "./LayerControl";
 
 export interface FlightMapHandle {
   flyTo: (lat: number, lon: number) => void;
-  /** Swaps in whatever offline basemap is currently on disk under the flight
-   * geometry - called once the auto-download tied to an Inspect scan
-   * completes (see App.tsx's ensureOfflineMapCoverage), so the map the user
-   * is already looking at gets filled in instead of staying blank. Doesn't
-   * move the camera - the result-driven fitBounds effect already put it over
-   * the flight area, which is the same area this basemap was downloaded for.
-   * Resolves false if nothing's downloaded (or it failed to load). */
-  loadOfflineBasemap: () => Promise<boolean>;
 }
 
 interface FlightMapProps {
@@ -24,6 +16,14 @@ interface FlightMapProps {
   visibility: LayerVisibility;
   stitchResult: StitchResult | null;
   mosaicOpacity: number;
+  /** The offline basemap to draw under the flight geometry, or null for the
+   * blank background. App only sets this while an inspected folder's result
+   * is on screen, for a basemap known to cover that flight (see
+   * ensureOfflineMapCoverage) - outside an inspection the main map is always
+   * blank, and cached basemaps are only viewable via OfflineBasemapPreview.
+   * Swapping it doesn't move the camera: the result-driven fitBounds effect
+   * already put it over the flight area. */
+  basemap: OfflineBasemapInfo | null;
 }
 
 const MOSAIC_SOURCE_ID = "mosaic";
@@ -143,41 +143,28 @@ function applyMosaic(map: maplibregl.Map, stitchResult: StitchResult | null, mos
 }
 
 export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function FlightMap(
-  { result, visibility, stitchResult, mosaicOpacity },
+  { result, visibility, stitchResult, mosaicOpacity, basemap },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const loadedRef = useRef(false);
-  const attributionAddedRef = useRef(false);
+  // State twin of loadedRef, so the basemap effect re-runs once the map is
+  // ready if a basemap was requested before then.
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const attributionRef = useRef<maplibregl.AttributionControl | null>(null);
+  // Latest props for the async style swap below, which re-adds the flight
+  // layers after `setStyle` wipes them - by then the effect's own closure
+  // could be several renders stale.
+  const latestRef = useRef({ result, visibility, stitchResult, mosaicOpacity });
+  latestRef.current = { result, visibility, stitchResult, mosaicOpacity };
+  // Which basemap the map currently shows ("" = BLANK_STYLE), so a prop
+  // change resolving to the same one doesn't trigger a pointless swap.
+  const shownBasemapKeyRef = useRef("");
 
   useImperativeHandle(ref, () => ({
     flyTo(lat, lon) {
       mapRef.current?.flyTo({ center: [lon, lat], zoom: 19, duration: 600 });
-    },
-    async loadOfflineBasemap() {
-      const map = mapRef.current;
-      if (!map || !loadedRef.current) return false;
-
-      const resolved = await loadOfflineBasemapStyle();
-      if (!resolved) return false;
-
-      await new Promise<void>((resolve) => {
-        map.once("style.load", () => {
-          addBaseLayers(map);
-          applyData(map, result);
-          applyVisibility(map, visibility);
-          applyMosaic(map, stitchResult, mosaicOpacity, visibility);
-          resolve();
-        });
-        map.setStyle(resolved.style, { diff: false });
-      });
-
-      if (!attributionAddedRef.current) {
-        map.addControl(new maplibregl.AttributionControl(), "bottom-right");
-        attributionAddedRef.current = true;
-      }
-      return true;
     },
   }));
 
@@ -198,6 +185,7 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
       loadedRef.current = true;
       applyData(map, result);
       applyVisibility(map, visibility);
+      setMapLoaded(true);
     });
 
     mapRef.current = map;
@@ -206,10 +194,54 @@ export const FlightMap = forwardRef<FlightMapHandle, FlightMapProps>(function Fl
       map.remove();
       mapRef.current = null;
       loadedRef.current = false;
-      attributionAddedRef.current = false;
+      attributionRef.current = null;
+      shownBasemapKeyRef.current = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Swaps the base style between BLANK_STYLE and the offline basemap.
+  // `cancelled` covers a quick show-then-clear (e.g. "Scan another card"
+  // while the archive is still being read into memory): the stale load must
+  // not land on the map after the blank style already did.
+  const basemapKey = basemap ? `${basemap.path}|${basemap.downloadedAt}` : "";
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || basemapKey === shownBasemapKeyRef.current) return;
+    let cancelled = false;
+
+    (async () => {
+      let style: StyleSpecification = BLANK_STYLE;
+      if (basemapKey) {
+        const resolved = await loadOfflineBasemapStyle().catch(() => null);
+        if (cancelled || !resolved) return;
+        style = resolved.style;
+      }
+
+      map.once("style.load", () => {
+        const latest = latestRef.current;
+        addBaseLayers(map);
+        applyData(map, latest.result);
+        applyVisibility(map, latest.visibility);
+        applyMosaic(map, latest.stitchResult, latest.mosaicOpacity, latest.visibility);
+      });
+      map.setStyle(style, { diff: false });
+      shownBasemapKeyRef.current = basemapKey;
+
+      // Attribution only while real third-party map data is on screen.
+      if (basemapKey && !attributionRef.current) {
+        attributionRef.current = new maplibregl.AttributionControl();
+        map.addControl(attributionRef.current, "bottom-right");
+      } else if (!basemapKey && attributionRef.current) {
+        map.removeControl(attributionRef.current);
+        attributionRef.current = null;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [basemapKey, mapLoaded]);
 
   useEffect(() => {
     const map = mapRef.current;

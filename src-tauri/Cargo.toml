@@ -37,7 +37,7 @@ tiff = "0.11"
 tempfile = "3"
 ort = { version = "2.0.0-rc.13", features = ["ndarray", "directml"] }
 ndarray = "0.17"
-pmtiles = { version = "0.24", default-features = false, features = ["http-async", "write", "reqwest-default"] }
+pmtiles = { version = "0.24", default-features = false, features = ["write"] }
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
 

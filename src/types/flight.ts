@@ -123,7 +123,7 @@ export interface BasemapBbox {
 }
 
 /** Mirrors `OfflineBasemapStage` (`src-tauri/src/models/offline_basemap.rs`). */
-export type OfflineBasemapStage = "locating-build" | "downloading-tiles" | "finalizing";
+export type OfflineBasemapStage = "connecting" | "downloading-tiles" | "finalizing";
 
 export interface OfflineBasemapProgress {
   stage: OfflineBasemapStage;

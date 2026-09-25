@@ -8,8 +8,9 @@ import type { BasemapBbox, OfflineBasemapInfo } from "../types/flight";
 // The offline basemap is downloaded per-area by the user via
 // OfflineBasemapPanel/download_offline_basemap into Tauri's app-data dir, then
 // loaded here through the asset protocol like the Quick Stitch preview PNG.
-// It's never wired into the main FlightMap - only OfflineBasemapPreview uses
-// this, to render a hover preview from OfflineBasemapInfoCard.
+// Used by FlightMap (only while an inspected flight is on screen, via its
+// `basemap` prop) and by OfflineBasemapPreview (the Download map tab's hover
+// preview - the only way to see a basemap outside an inspection).
 const OFFLINE_BASEMAP_SOURCE_ID = "offline-basemap";
 const OSM_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';

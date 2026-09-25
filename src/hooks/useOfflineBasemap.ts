@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { BasemapBbox, OfflineBasemapInfo, OfflineBasemapProgress, OfflineBasemapStatus } from "../types/flight";
 
-const IDLE_PROGRESS: OfflineBasemapProgress = { stage: "locating-build", tilesDone: 0, tilesTotal: 0, percent: 0 };
+const IDLE_PROGRESS: OfflineBasemapProgress = { stage: "connecting", tilesDone: 0, tilesTotal: 0, percent: 0 };
 
 export function useOfflineBasemap() {
   const [status, setStatus] = useState<OfflineBasemapStatus>("idle");

@@ -31,3 +31,5 @@ DESIGN.md
 
 src-tauri/resources/*
 !src-tauri/resources/README.md
+
+.env

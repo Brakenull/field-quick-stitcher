@@ -14,7 +14,7 @@ import { useQuickStitch } from "./hooks/useQuickStitch";
 import { useOfflineBasemap } from "./hooks/useOfflineBasemap";
 import { checkInternetConnection } from "./lib/network";
 import { bboxContains, bboxOfPhotos } from "./lib/flightBbox";
-import type { InspectionResult, NeighborCap, StitchBackend, StitchStage } from "./types/flight";
+import type { InspectionResult, NeighborCap, OfflineBasemapInfo, StitchBackend, StitchStage } from "./types/flight";
 import "@fontsource-variable/inter";
 import "@fontsource/fira-code/400.css";
 import "./App.css";
@@ -69,6 +69,15 @@ function App() {
   const [neighborCap, setNeighborCap] = useState<NeighborCap>("capped");
   const [mapDataNotice, setMapDataNotice] = useState<string | null>(null);
   const [mapDownloadNotice, setMapDownloadNotice] = useState<string | null>(null);
+  // The basemap under the main map. Only ever non-null while an inspected
+  // folder's result is on screen, for a basemap that covers that flight -
+  // outside an inspection the main map stays blank, and cached basemaps are
+  // only viewable through the Download map tab's preview.
+  const [mainBasemap, setMainBasemap] = useState<OfflineBasemapInfo | null>(null);
+  // Bumped by every new scan and every reset: ensureOfflineMapCoverage
+  // outlives both (a download can take a while), and must not put a basemap
+  // or banner on screen for a scan that's no longer the current one.
+  const scanIdRef = useRef(0);
   const mapRef = useRef<FlightMapHandle>(null);
 
   // Inspect itself is a purely local EXIF scan - it needs neither internet
@@ -77,7 +86,8 @@ function App() {
   // disk. So once the scan resolves the survey's actual GPS bbox, opportunistically
   // grab a fresh one for that exact area while a connection is available, or
   // flag it if there's neither a connection nor one already cached.
-  async function ensureOfflineMapCoverage(inspection: InspectionResult) {
+  async function ensureOfflineMapCoverage(inspection: InspectionResult, scanId: number) {
+    const isCurrent = () => scanIdRef.current === scanId;
     const bbox = bboxOfPhotos(inspection.photos);
 
     // Re-downloading is pointless (and the slowest part of this whole flow)
@@ -94,25 +104,26 @@ function App() {
       cached.maxZoom >= AUTO_DOWNLOAD_MAX_ZOOM &&
       bboxContains(cached.bbox, bbox)
     ) {
-      if (await mapRef.current?.loadOfflineBasemap()) {
-        setMapDownloadNotice("Using the offline map already downloaded for this area.");
-      }
+      setMainBasemap(cached);
+      setMapDownloadNotice("Using the offline map already downloaded for this area.");
       return;
     }
 
     const online = await checkInternetConnection();
+    if (!isCurrent()) return;
     if (online) {
       if (bbox) {
         const downloaded = await offlineBasemap.download(bbox, AUTO_DOWNLOAD_MAX_ZOOM);
-        if (downloaded) {
+        // The download itself still finishes (and replaces the cache) after
+        // a reset or a newer scan - only showing it is skipped.
+        if (downloaded && isCurrent()) {
           setMapDownloadNotice(
             `Offline map downloaded for this flight area (zoom ${downloaded.maxZoom}, ${(downloaded.sizeBytes / (1024 * 1024)).toFixed(1)}MB).`,
           );
-          // Loads it under the flight path/footprints/heatmap the user is
-          // already looking at - safe to do unconditionally here (unlike a
-          // stale previously-cached basemap) since this one was just
-          // downloaded for this exact flight's own bbox.
-          await mapRef.current?.loadOfflineBasemap();
+          // Shown under the flight path/footprints/heatmap the user is
+          // already looking at - it was just downloaded for this exact
+          // flight's own bbox.
+          setMainBasemap(downloaded);
         }
       }
     } else if (!offlineBasemap.info) {
@@ -123,17 +134,23 @@ function App() {
   }
 
   async function handleInspect(path: string) {
+    const scanId = ++scanIdRef.current;
     stitchState.reset();
     setMapDataNotice(null);
     setMapDownloadNotice(null);
+    setMainBasemap(null);
     const inspection = await inspect(path);
-    if (inspection) await ensureOfflineMapCoverage(inspection);
+    if (inspection && scanIdRef.current === scanId) await ensureOfflineMapCoverage(inspection, scanId);
   }
 
+  // Back to "no folder": the main map returns to the blank background too -
+  // the basemap belonged to the flight that was just cleared.
   function handleReset() {
+    scanIdRef.current++;
     stitchState.reset();
     setMapDataNotice(null);
     setMapDownloadNotice(null);
+    setMainBasemap(null);
     reset();
   }
 
@@ -337,6 +354,7 @@ function App() {
           visibility={visibility}
           stitchResult={stitchState.result}
           mosaicOpacity={mosaicOpacity}
+          basemap={mainBasemap}
         />
       </main>
     </div>
