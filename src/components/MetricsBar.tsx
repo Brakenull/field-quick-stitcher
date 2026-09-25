@@ -19,7 +19,7 @@ export function MetricsBar({ metrics }: { metrics: Metrics }) {
   ];
 
   return (
-    <div className="metrics-bar">
+    <div className="metrics-bar" role="group" aria-label="Scan summary">
       {items.map((item) => (
         <div className="metrics-bar__item" key={item.label}>
           <span className="metrics-bar__value">{item.value}</span>

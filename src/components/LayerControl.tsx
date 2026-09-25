@@ -25,23 +25,32 @@ const LABELS: Record<keyof LayerVisibility, string> = {
 
 export function LayerControl({ visibility, onChange, hasMosaic, mosaicOpacity, onMosaicOpacityChange }: LayerControlProps) {
   return (
-    <div className="layer-control">
+    <section className="layer-control" aria-labelledby="layers-heading">
+      <h2 className="section-title" id="layers-heading">
+        Map layers
+      </h2>
       {(Object.keys(LABELS) as (keyof LayerVisibility)[]).map((key) => {
         if (key === "mosaic" && !hasMosaic) return null;
         return (
-          <label key={key} className="layer-control__item">
+          <label key={key} className="toggle">
+            <span className="toggle__label">{LABELS[key]}</span>
             <input
               type="checkbox"
+              role="switch"
+              className="toggle__input"
               checked={visibility[key]}
               onChange={(e) => onChange({ ...visibility, [key]: e.currentTarget.checked })}
             />
-            {LABELS[key]}
+            <span className="toggle__track" aria-hidden="true" />
           </label>
         );
       })}
       {hasMosaic && visibility.mosaic && onMosaicOpacityChange && (
-        <label className="layer-control__item layer-control__opacity">
-          Mosaic opacity
+        <label className="layer-control__opacity">
+          <span className="layer-control__opacity-label">
+            Mosaic opacity
+            <span className="mono">{Math.round((mosaicOpacity ?? 1) * 100)}%</span>
+          </span>
           <input
             type="range"
             min={0}
@@ -52,6 +61,6 @@ export function LayerControl({ visibility, onChange, hasMosaic, mosaicOpacity, o
           />
         </label>
       )}
-    </div>
+    </section>
   );
 }

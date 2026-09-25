@@ -1,7 +1,7 @@
 [package]
-name = "main"
-version = "0.1.0"
-description = "A Tauri App"
+name = "field-stitch"
+version = "1.0.0"
+description = "A desktop app for checking drone photo surveys while you're still in the field"
 authors = ["you"]
 edition = "2021"
 

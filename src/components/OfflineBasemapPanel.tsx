@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Notice } from "./Notice";
+import { ProgressBar } from "./ProgressBar";
 import type { BasemapBbox, OfflineBasemapInfo, OfflineBasemapProgress, OfflineBasemapStatus } from "../types/flight";
 
 interface OfflineBasemapPanelProps {
@@ -107,8 +109,9 @@ export function OfflineBasemapPanel({ status, progress, error, download }: Offli
           </label>
         </div>
         <label className="stitch-field">
-          Max zoom (0-15, higher = more detail &amp; larger download)
+          Max zoom
           <input
+            aria-describedby="max-zoom-help"
             type="number"
             min={0}
             max={15}
@@ -117,25 +120,23 @@ export function OfflineBasemapPanel({ status, progress, error, download }: Offli
             onChange={(e) => setMaxZoom(Number(e.currentTarget.value))}
             disabled={downloading}
           />
+          <span className="stitch-field__help" id="max-zoom-help">
+            0 to 15. Higher zoom shows more detail but downloads more.
+          </span>
         </label>
-        <button type="submit" disabled={downloading}>
+        <button type="submit" className="btn btn--primary" disabled={downloading}>
           {downloading ? "Downloading..." : "Download offline map"}
         </button>
 
         {downloading && (
-          <div className="progress">
-            <div className="progress__bar">
-              <div className="progress__fill" style={{ width: `${progress.percent}%` }} />
-            </div>
-            <span>
-              {STAGE_LABELS[progress.stage]}
-              {progress.tilesTotal > 0 && ` (${progress.tilesDone}/${progress.tilesTotal} tiles)`} - {progress.percent}%
-            </span>
-          </div>
+          <ProgressBar
+            percent={progress.percent}
+            label={`${STAGE_LABELS[progress.stage]}${progress.tilesTotal > 0 ? ` (${progress.tilesDone}/${progress.tilesTotal} tiles)` : ""} ${progress.percent}%`}
+          />
         )}
 
-        {formError && <p className="error-banner">{formError}</p>}
-        {status === "error" && error && <p className="error-banner">{error}</p>}
+        {formError && <Notice variant="error">{formError}</Notice>}
+        {status === "error" && error && <Notice variant="error">{error}</Notice>}
       </form>
     </div>
   );

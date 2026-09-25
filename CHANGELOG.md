@@ -1,0 +1,245 @@
+# Changelog
+
+All notable changes to Field Stitch are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Versions before 1.0.0 were never tagged or released. They were reconstructed from the commit history: a feature commit bumps the minor version, and a fix commit bumps the patch version.
+
+## [1.0.0] - 2026-09-25
+
+The first public release of Field Stitch, a desktop app for checking drone photo surveys while you're still in the field. Point it at a memory card and it tells you, before you pack up, whether the flight covered the whole area, which shots are blurry, and where to fly back to. It can also stitch a quick georeferenced mosaic from the same photos, and it keeps working without an internet connection.
+
+### Highlights
+
+#### Inspect a survey in seconds
+
+- Drop a memory card folder onto the window, or browse to it. Every JPEG inside is scanned in parallel, with a live progress bar.
+- The scan reads only the metadata already in your photos (EXIF GPS, focal length and capture time, plus DJI's XMP flight data), so it needs no network access.
+- Each photo's ground footprint is calculated from its altitude, focal length, sensor size and gimbal yaw.
+- A red/yellow/green heatmap shows how many photos cover each spot. Under-covered areas are grouped into **coverage gaps**, each with an area estimate and fly-back coordinates.
+- **Blur detection** flags soft shots from their embedded thumbnails, without decoding the full-resolution image.
+- Photos with no GPS are kept and listed as **Missing GPS** instead of being silently dropped, so a mid-flight GPS dropout stays visible.
+- Click any gap or blurry photo to fly the map to it.
+- The summary shows photo count, coverage area, average altitude, gap count, blurry count and scan time.
+- Export the results as **JSON** or a **PDF report**. The PDF lists every gap and blurry photo, adding pages as needed.
+
+#### Quick Stitch mosaic
+
+- From a finished scan, build a georeferenced **GeoTIFF orthomosaic** and see it on the map with adjustable opacity. A PNG preview is written next to the GeoTIFF.
+- The pipeline runs in stages, and progress shows each one: downsample → detect features → match overlapping photos → align poses → composite → write GeoTIFF.
+- **Backend choice:**
+  - **ONNX** (default): SuperPoint features on the GPU through DirectML, and LightGlue matching on the CPU.
+  - **ORB**: a CPU-only fallback for machines without a usable GPU.
+- **Neighbor matching choice:**
+  - **Capped** (default): each photo is matched with its ~10 strongest overlapping neighbors. Runtime stays bounded.
+  - **Uncapped**: every overlapping pair is matched. This is more robust, but can take hours on densely overlapping surveys.
+- Photos are only matched against GPS neighbors whose footprints overlap, never against every other photo.
+- Pose-graph optimization combines GPS/yaw priors with the visual matches to align every photo in one frame.
+- Weak photo pairs are reported as warnings with the result.
+
+#### Offline maps
+
+- **Download map** tab: enter a bounding box and a max zoom (0–15) to download a detailed vector basemap (Protomaps / OpenStreetMap) before you head somewhere with no signal.
+- **Automatic download:** when you inspect a folder while online, the app downloads a basemap for that flight's own GPS area and loads it under your results. If you're offline and have no map downloaded, you get a warning, and the scan still completes.
+- Hover or focus the downloaded-map card to preview the area it covers.
+- Without a basemap, the flight path, footprints and heatmap still render on a plain background, with no network requests.
+
+#### Interface
+
+- A light, high-contrast theme built for reading in bright outdoor light, following the SkyFrame design system (`DESIGN.md`):
+  - indigo primary color and amber accent
+  - Inter and Fira Code fonts, bundled with the app so it still works offline
+- Map layers are toggle switches: flight path, photo points, footprints, overlap heatmap and mosaic.
+- Status messages always pair color with an icon.
+- Accessibility:
+  - touch targets of at least 44px
+  - a visible focus ring on every control
+  - keyboard navigation for the sidebar tabs
+  - progress bars and status updates announced to screen readers
+  - reduced-motion support
+
+### System requirements
+
+- Windows 10 or 11. GPU feature extraction uses DirectML, which needs a DirectX 12 capable GPU. On machines without one, choose the **ORB** backend.
+- Drone photos with GPS EXIF. Coverage footprints, heatmap, gaps and Quick Stitch also need:
+  - DJI `drone-dji` XMP data (relative altitude and gimbal yaw)
+  - a focal length and sensor size, derived from `FocalLengthIn35mmFilm`, from the focal-plane resolution tags, or from a built-in list of DJI cameras (Phantom 4 / 4 Pro / 4 RTK, Mavic 2 Pro, Mavic 3 Enterprise / Thermal)
+- An internet connection only to download offline maps.
+
+### Known limitations
+
+- Photos without DJI altitude/yaw data appear only as points on the flight path. They add nothing to coverage and are excluded from Quick Stitch.
+- Quick Stitch is a fast field preview, not a survey-grade orthomosaic. The GeoTIFF has no tiling or overviews (it is not a Cloud Optimized GeoTIFF).
+- Only one offline basemap is stored at a time. A new download, manual or automatic, replaces the previous one.
+- The main map shows only a basemap downloaded for the flight you're inspecting right now, not one left over from a previous session.
+- Offline maps have no text labels, because the app doesn't bundle the fonts and icons that map labels need.
+- A single download is limited to 200,000 tiles. Shrink the area or lower the max zoom if you hit the limit.
+- Quick Stitch writes a diagnostic progress log to `%TEMP%\quick_stitch_progress.log` on every run.
+
+### Changed since 0.10.0
+
+- Redesigned the whole interface to the SkyFrame design system:
+  - light theme, new type scale, restyled buttons and inputs
+  - toggle switches for map layers
+  - new status messages and indigo-to-amber progress bars
+  - map layer colors matched to the new palette
+- Offline map downloads now show a progress bar instead of a text line.
+- The downloaded-map preview now opens on keyboard focus as well as on hover.
+- The window and page title is now "Field Stitch".
+- Renamed the app's package, product name and identifier (`com.brake.field-stitch`) from the scaffold's `main`.
+
+## [0.10.0] - 2026-09-23
+
+### Added
+
+- Inspecting a folder while online now downloads an offline basemap for the flight's GPS area and loads it under the results.
+- If you're offline and no basemap has been downloaded yet, a warning appears.
+- README with features, getting started and usage guides.
+
+### Fixed
+
+- A second overlapping basemap download now fails with a clear "already in progress" error. Previously two downloads raced on the same file.
+- Dropping a folder while a scan was running could fire the drop twice.
+
+## [0.9.1] - 2026-09-23
+
+### Added
+
+- Hover preview of the downloaded offline basemap, rendered in its own small map.
+
+### Fixed
+
+- Downloaded basemaps rendered as a blank background. Tiles were stored double-gzipped.
+- The basemap is now loaded as one file read instead of HTTP range requests, which Tauri's asset protocol doesn't serve reliably.
+- Zooming past a basemap's downloaded max zoom showed empty tiles. It now upscales the last available tiles.
+- The preview popover was clipped by the sidebar.
+
+## [0.9.0] - 2026-09-22
+
+### Added
+
+- **Download map** tab: download a regional offline vector basemap for any bounding box and max zoom. This runs natively in Rust, with parallel tile fetching, retries and per-request timeouts.
+- Downloads are refused up front if they would need more than 200,000 tiles.
+- A card showing the currently downloaded basemap: area, zoom, size, date, and any tiles that failed to download.
+
+### Removed
+
+- The manual, developer-only basemap setup instructions (`public/offline_tiles/README.md`).
+
+## [0.8.0] - 2026-09-19
+
+### Added
+
+- **Neighbor matching** option for Quick Stitch: Capped (fast, ~10 neighbors per photo) or Uncapped (every overlapping pair).
+
+## [0.7.3] - 2026-09-19
+
+### Fixed
+
+- Quick Stitch now keeps only each photo's ~10 strongest overlapping neighbors. On a dense cross-hatch survey (172 photos, a median of 85 neighbors per photo) matching alone previously took about 3.7 hours.
+
+## [0.7.2] - 2026-09-18
+
+### Fixed
+
+- Feature extraction now keeps at most 2,000 keypoints per photo. On densely textured terrain (quarries, gravel, rooftops) matching previously slowed down several-fold, turning a ~1 hour stitch into 6+ hours.
+
+## [0.7.1] - 2026-09-18
+
+### Added
+
+- Photos without GPS are kept and listed as **Missing GPS** instead of being dropped.
+- Sensor size can now be read from standard EXIF focal-plane resolution tags, which adds support for many non-DJI cameras.
+- Photos are ordered by capture time with sub-second precision, falling back to the file name's shot number and then the file's modified time.
+
+### Fixed
+
+- PDF reports cut off long gap and blur lists at the bottom of the first page. They now continue onto additional pages.
+- The blurry-photo count no longer leaves out blurry photos that have no GPS.
+
+## [0.7.0] - 2026-09-14
+
+### Added
+
+- **Backend** option for Quick Stitch: ONNX (default) or ORB (CPU-only fallback).
+
+### Changed
+
+- Faster mosaic compositing: blend weights are computed once per image size, and pixels are processed a row at a time.
+- The GPU feature extractor is released as soon as feature detection finishes, freeing GPU memory for the rest of the stitch.
+
+## [0.6.0] - 2026-09-12
+
+### Changed
+
+- Split feature extraction and matching into two models: SuperPoint extracts features once per photo on the GPU (DirectML), and LightGlue matches each pair on the CPU. Extraction on a 156-photo survey dropped from ~7–8 minutes to under 2 minutes.
+- Extraction now runs on the downsampled images instead of full-resolution photos.
+
+### Fixed
+
+- Memory use grew without limit during matching.
+
+## [0.5.0] - 2026-09-10
+
+### Added
+
+- ONNX Runtime feature extraction and matching for Quick Stitch, replacing ORB as the default. It ran on the CPU at full photo resolution.
+
+## [0.4.0] - 2026-09-10
+
+### Fixed
+
+- The Quick Stitch mosaic preview now actually loads on the map.
+- Starting a new scan or resetting now clears the previous scan's mosaic, which previously stayed on the map.
+
+## [0.3.0] - 2026-09-09
+
+### Added
+
+- **Quick Stitch**: builds a georeferenced GeoTIFF mosaic and PNG preview from the last scan's photos. Stages:
+  - downsampling
+  - ORB feature matching restricted to GPS neighbors
+  - RANSAC homography
+  - pose-graph optimization
+  - feathered blending
+- Mosaic layer on the map, with a visibility toggle and opacity slider.
+- Stage-by-stage stitch progress.
+- Optional bundled offline basemap, with a script to fetch one.
+
+## [0.2.0] - 2026-09-07
+
+### Added
+
+- **Inspect**:
+  - parallel scan of a folder of drone JPEGs, with progress
+  - EXIF/DJI XMP metadata parsing
+  - ground footprints
+  - thumbnail-based blur detection
+  - overlap heatmap and coverage gap detection
+- Interactive map showing the flight path, photo points, footprints and heatmap, with layer toggles.
+- Alert panel for gaps and blurry photos. Clicking an alert flies the map there.
+- Metrics summary.
+- JSON and PDF report export.
+
+## [0.1.0] - 2026-09-04
+
+### Added
+
+- Project scaffold: Tauri 2, React 19 and TypeScript.
+
+[1.0.0]: https://github.com/Brakenull/field-quick-stitcher/compare/93b7317...v1.0.0
+[0.10.0]: https://github.com/Brakenull/field-quick-stitcher/compare/23034bb...93b7317
+[0.9.1]: https://github.com/Brakenull/field-quick-stitcher/compare/7e907e9...23034bb
+[0.9.0]: https://github.com/Brakenull/field-quick-stitcher/compare/62bcbdc...7e907e9
+[0.8.0]: https://github.com/Brakenull/field-quick-stitcher/compare/5682423...62bcbdc
+[0.7.3]: https://github.com/Brakenull/field-quick-stitcher/compare/042e0d9...5682423
+[0.7.2]: https://github.com/Brakenull/field-quick-stitcher/compare/8f6a460...042e0d9
+[0.7.1]: https://github.com/Brakenull/field-quick-stitcher/compare/21b0c31...8f6a460
+[0.7.0]: https://github.com/Brakenull/field-quick-stitcher/compare/a122c3e...21b0c31
+[0.6.0]: https://github.com/Brakenull/field-quick-stitcher/compare/09b1813...a122c3e
+[0.5.0]: https://github.com/Brakenull/field-quick-stitcher/compare/0cf4ab7...09b1813
+[0.4.0]: https://github.com/Brakenull/field-quick-stitcher/compare/fb28914...0cf4ab7
+[0.3.0]: https://github.com/Brakenull/field-quick-stitcher/compare/42a793a...fb28914
+[0.2.0]: https://github.com/Brakenull/field-quick-stitcher/compare/d73a2c0...42a793a
+[0.1.0]: https://github.com/Brakenull/field-quick-stitcher/commit/d73a2c0

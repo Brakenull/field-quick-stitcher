@@ -53,9 +53,13 @@ export function Dropzone({ disabled, onFolderSelected }: DropzoneProps) {
 
   return (
     <div className={`dropzone ${isDragOver ? "dropzone--active" : ""}`}>
-      <p className="dropzone__title">Drag the memory card folder here</p>
-      <p className="dropzone__hint">or</p>
-      <button className="dropzone__browse" onClick={browse} disabled={disabled}>
+      <svg className="dropzone__icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+        <path d="M12 10v6m-3-3l3 3 3-3" />
+      </svg>
+      <p className="dropzone__title">Drop the memory card folder here</p>
+      <p className="dropzone__hint">Every JPEG inside is scanned for GPS, overlap and blur.</p>
+      <button className="btn btn--primary" onClick={browse} disabled={disabled}>
         Browse folder…
       </button>
     </div>

@@ -13,16 +13,16 @@ export function AlertPanel({ gaps, blurAlerts, missingGpsFiles, onFocusPoint }: 
   return (
     <div className="alert-panel">
       <section>
-        <h3>
-          Coverage gaps <span className="badge badge--red">{gaps.length}</span>
-        </h3>
+        <h2 className="section-title">
+          Coverage gaps <span className={`badge ${gaps.length ? "badge--danger" : "badge--success"}`}>{gaps.length}</span>
+        </h2>
         {gaps.length === 0 ? (
-          <p className="alert-panel__empty">No gaps detected — full coverage.</p>
+          <p className="alert-panel__empty">No gaps. Every part of the area is covered.</p>
         ) : (
           <ul>
             {gaps.map((gap) => (
               <li key={gap.id}>
-                <button className="alert-item" onClick={() => onFocusPoint(gap.lat, gap.lon)}>
+                <button className="alert-item alert-item--danger" onClick={() => onFocusPoint(gap.lat, gap.lon)}>
                   <span>
                     Gap #{gap.id + 1} — ~{gap.areaM2.toFixed(0)} m²
                   </span>
@@ -37,16 +37,17 @@ export function AlertPanel({ gaps, blurAlerts, missingGpsFiles, onFocusPoint }: 
       </section>
 
       <section>
-        <h3>
-          Blurry photos <span className="badge badge--yellow">{blurAlerts.length}</span>
-        </h3>
+        <h2 className="section-title">
+          Blurry photos{" "}
+          <span className={`badge ${blurAlerts.length ? "badge--warning" : "badge--success"}`}>{blurAlerts.length}</span>
+        </h2>
         {blurAlerts.length === 0 ? (
           <p className="alert-panel__empty">No blurry photos detected.</p>
         ) : (
           <ul>
             {blurAlerts.map((alert) => (
               <li key={alert.fileName}>
-                <button className="alert-item" onClick={() => onFocusPoint(alert.lat, alert.lon)}>
+                <button className="alert-item alert-item--warning" onClick={() => onFocusPoint(alert.lat, alert.lon)}>
                   <span>{alert.fileName}</span>
                   <span className="alert-item__coords">
                     score {alert.blurScore.toFixed(0)} · {alert.lat.toFixed(6)}, {alert.lon.toFixed(6)}
@@ -60,9 +61,9 @@ export function AlertPanel({ gaps, blurAlerts, missingGpsFiles, onFocusPoint }: 
 
       {missingGpsFiles.length > 0 && (
         <section>
-          <h3>
-            Missing GPS <span className="badge badge--yellow">{missingGpsFiles.length}</span>
-          </h3>
+          <h2 className="section-title">
+            Missing GPS <span className="badge badge--warning">{missingGpsFiles.length}</span>
+          </h2>
           <ul>
             {missingGpsFiles.map((fileName) => (
               <li key={fileName}>

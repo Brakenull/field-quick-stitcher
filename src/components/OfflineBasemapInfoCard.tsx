@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { OfflineBasemapInfo } from "../types/flight";
 import { OfflineBasemapPreview } from "./OfflineBasemapPreview";
+import { Notice } from "./Notice";
 
 interface OfflineBasemapInfoCardProps {
   info: OfflineBasemapInfo | null;
@@ -52,7 +53,15 @@ export function OfflineBasemapInfoCard({ info }: OfflineBasemapInfoCardProps) {
 
   return (
     <div className="offline-basemap-info" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
-      <div className="offline-basemap-info__card" ref={cardRef}>
+      {/* Focusable so keyboard users get the same preview hover gives. */}
+      <div
+        className="offline-basemap-info__card"
+        ref={cardRef}
+        tabIndex={0}
+        aria-label="Downloaded offline map. Focus to preview."
+        onFocus={handleEnter}
+        onBlur={handleLeave}
+      >
         <span className="offline-basemap-info__bbox">
           {info.bbox.minLon.toFixed(3)}, {info.bbox.minLat.toFixed(3)} to {info.bbox.maxLon.toFixed(3)},{" "}
           {info.bbox.maxLat.toFixed(3)}
@@ -61,7 +70,7 @@ export function OfflineBasemapInfoCard({ info }: OfflineBasemapInfoCardProps) {
           Zoom {info.maxZoom} &middot; {(info.sizeBytes / (1024 * 1024)).toFixed(1)}MB &middot;{" "}
           {new Date(info.downloadedAt).toLocaleDateString()}
         </span>
-        <span className="offline-basemap-info__action">Hover to preview</span>
+        <span className="offline-basemap-info__action">Hover or focus to preview</span>
       </div>
 
       {popoverPos && (
@@ -71,10 +80,10 @@ export function OfflineBasemapInfoCard({ info }: OfflineBasemapInfoCardProps) {
       )}
 
       {info.tilesFailed > 0 && (
-        <p className="error-banner">
+        <Notice variant="warning">
           {info.tilesFailed} of {info.tileCount + info.tilesFailed} tiles couldn't be downloaded (network issues) -
           the map may have gaps in this area. Try downloading again, ideally on a more stable connection.
-        </p>
+        </Notice>
       )}
     </div>
   );

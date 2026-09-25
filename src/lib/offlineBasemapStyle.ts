@@ -83,7 +83,7 @@ function offlineBasemapStyle(key: string, maxZoom: number, bbox: BasemapBbox): S
       },
     },
     layers: [
-      { id: "background", type: "background", paint: { "background-color": "#eef1f2" } },
+      { id: "background", type: "background", paint: { "background-color": "#F9FAFB" } },
       ...renderable,
     ],
   } as StyleSpecification;

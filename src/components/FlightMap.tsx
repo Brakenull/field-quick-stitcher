@@ -35,7 +35,7 @@ const MOSAIC_LAYER_ID = "mosaic-layer";
 const BLANK_STYLE: StyleSpecification = {
   version: 8,
   sources: {},
-  layers: [{ id: "background", type: "background", paint: { "background-color": "#eef1f2" } }],
+  layers: [{ id: "background", type: "background", paint: { "background-color": "#F9FAFB" } }],
 };
 
 const EMPTY_FC = { type: "FeatureCollection" as const, features: [] as GeoFeature[] };
@@ -75,13 +75,13 @@ function addBaseLayers(map: maplibregl.Map) {
     id: "footprints-fill",
     type: "fill",
     source: "footprints",
-    paint: { "fill-color": "#3b82f6", "fill-opacity": 0.08 },
+    paint: { "fill-color": "#4F46E5", "fill-opacity": 0.08 },
   });
   map.addLayer({
     id: "footprints-outline",
     type: "line",
     source: "footprints",
-    paint: { "line-color": "#3b82f6", "line-width": 0.5, "line-opacity": 0.4 },
+    paint: { "line-color": "#4F46E5", "line-width": 0.5, "line-opacity": 0.4 },
   });
 
   map.addSource("heatmap", { type: "geojson", data: EMPTY_FC });
@@ -90,7 +90,7 @@ function addBaseLayers(map: maplibregl.Map) {
     type: "fill",
     source: "heatmap",
     paint: {
-      "fill-color": ["match", ["get", "level"], "red", "#ef4444", "yellow", "#eab308", "green", "#22c55e", "#999999"],
+      "fill-color": ["match", ["get", "level"], "red", "#EF4444", "yellow", "#F59E0B", "green", "#10B981", "#9CA3AF"],
       "fill-opacity": 0.45,
     },
   });
@@ -101,7 +101,7 @@ function addBaseLayers(map: maplibregl.Map) {
     type: "line",
     source: "flight",
     filter: ["==", ["geometry-type"], "LineString"],
-    paint: { "line-color": "#1e293b", "line-width": 2 },
+    paint: { "line-color": "#1F2937", "line-width": 2 },
   });
   map.addLayer({
     id: "photo-points",
@@ -110,7 +110,7 @@ function addBaseLayers(map: maplibregl.Map) {
     filter: ["==", ["geometry-type"], "Point"],
     paint: {
       "circle-radius": 4,
-      "circle-color": ["case", ["get", "isBlurry"], "#ef4444", "#2563eb"],
+      "circle-color": ["case", ["get", "isBlurry"], "#EF4444", "#4F46E5"],
       "circle-stroke-color": "#ffffff",
       "circle-stroke-width": 1,
     },

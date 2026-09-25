@@ -6,6 +6,8 @@ import { AlertPanel } from "./components/AlertPanel";
 import { LayerControl, type LayerVisibility } from "./components/LayerControl";
 import { OfflineBasemapPanel } from "./components/OfflineBasemapPanel";
 import { OfflineBasemapInfoCard } from "./components/OfflineBasemapInfoCard";
+import { Notice } from "./components/Notice";
+import { ProgressBar } from "./components/ProgressBar";
 import { FlightMap, type FlightMapHandle } from "./components/FlightMap";
 import { useFlightInspector } from "./hooks/useFlightInspector";
 import { useQuickStitch } from "./hooks/useQuickStitch";
@@ -13,6 +15,8 @@ import { useOfflineBasemap } from "./hooks/useOfflineBasemap";
 import { checkInternetConnection } from "./lib/network";
 import { bboxOfPhotos } from "./lib/flightBbox";
 import type { InspectionResult, NeighborCap, StitchBackend, StitchStage } from "./types/flight";
+import "@fontsource-variable/inter";
+import "@fontsource/fira-code/400.css";
 import "./App.css";
 
 // Matches OfflineBasemapPanel's own manual-entry default - a reasonable
@@ -47,6 +51,11 @@ const DEFAULT_VISIBILITY: LayerVisibility = {
 };
 
 type SidebarTab = "inspect" | "offline-map";
+
+const SIDEBAR_TABS: { id: SidebarTab; label: string }[] = [
+  { id: "inspect", label: "Inspect" },
+  { id: "offline-map", label: "Download map" },
+];
 
 function App() {
   const { status, progress, result, error, inspect, exportReport, reset } = useFlightInspector();
@@ -107,6 +116,21 @@ function App() {
     reset();
   }
 
+  // Arrow/Home/End move between tabs (WAI-ARIA tablist pattern) - only the
+  // active tab sits in the Tab order, so the arrows are the way across.
+  function handleTabKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    const index = SIDEBAR_TABS.findIndex((t) => t.id === activeTab);
+    let next: number | null = null;
+    if (e.key === "ArrowRight") next = (index + 1) % SIDEBAR_TABS.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + SIDEBAR_TABS.length) % SIDEBAR_TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = SIDEBAR_TABS.length - 1;
+    if (next == null) return;
+    e.preventDefault();
+    setActiveTab(SIDEBAR_TABS[next].id);
+    document.getElementById(`tab-${SIDEBAR_TABS[next].id}`)?.focus();
+  }
+
   async function handleQuickStitch() {
     const outputPath = await save({
       defaultPath: "quick_stitch.tif",
@@ -131,29 +155,34 @@ function App() {
   }
 
   return (
-    <main className="app">
+    <div className="app">
       <aside className="sidebar">
         <header className="sidebar__header">
           <h1>Field Stitch</h1>
           <p>Flight coverage &amp; blur inspector</p>
         </header>
 
-        <nav className="sidebar-tabs">
-          <button
-            type="button"
-            className={`sidebar-tabs__item ${activeTab === "inspect" ? "sidebar-tabs__item--active" : ""}`}
-            onClick={() => setActiveTab("inspect")}
-          >
-            Inspect
-          </button>
-          <button
-            type="button"
-            className={`sidebar-tabs__item ${activeTab === "offline-map" ? "sidebar-tabs__item--active" : ""}`}
-            onClick={() => setActiveTab("offline-map")}
-          >
-            Download Map
-          </button>
+        <nav className="sidebar-tabs" role="tablist" aria-label="Sidebar sections" data-active={activeTab}>
+          {SIDEBAR_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={`tab-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              aria-controls="sidebar-panel"
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              className={`sidebar-tabs__item ${activeTab === tab.id ? "sidebar-tabs__item--active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+              onKeyDown={handleTabKeyDown}
+            >
+              {tab.label}
+            </button>
+          ))}
+          <span className="sidebar-tabs__indicator" aria-hidden="true" />
         </nav>
+
+        <div className="sidebar__panel" id="sidebar-panel" role="tabpanel" aria-labelledby={`tab-${activeTab}`}>
 
         {activeTab === "offline-map" && (
           <>
@@ -173,30 +202,24 @@ function App() {
               <Dropzone disabled={status === "scanning"} onFolderSelected={handleInspect} />
             )}
 
-            {status === "scanning" && (
-              <div className="progress">
-                <div className="progress__bar">
-                  <div className="progress__fill" style={{ width: `${progress}%` }} />
-                </div>
-                <span>{progress}% scanned</span>
-              </div>
-            )}
+            {status === "scanning" && <ProgressBar percent={progress} label={`Scanning photos... ${progress}%`} />}
 
-            {status === "error" && error && <p className="error-banner">{error}</p>}
+            {status === "error" && error && <Notice variant="error">{error}</Notice>}
 
-            {mapDataNotice && <p className="warning-banner">{mapDataNotice}</p>}
+            {mapDataNotice && <Notice variant="warning">{mapDataNotice}</Notice>}
 
             {status === "done" && result && (
               <>
                 {offlineBasemap.status === "downloading" && (
-                  <p className="export-status">
-                    Downloading offline map for this flight area ({offlineBasemap.progress.percent}%)...
-                  </p>
+                  <ProgressBar
+                    percent={offlineBasemap.progress.percent}
+                    label={`Downloading offline map for this area... ${offlineBasemap.progress.percent}%`}
+                  />
                 )}
                 {offlineBasemap.status === "error" && offlineBasemap.error && (
-                  <p className="warning-banner">Couldn't download an offline map for this area: {offlineBasemap.error}</p>
+                  <Notice variant="warning">Couldn't download an offline map for this area: {offlineBasemap.error}</Notice>
                 )}
-                {mapDownloadNotice && <p className="success-banner">{mapDownloadNotice}</p>}
+                {mapDownloadNotice && <Notice variant="success">{mapDownloadNotice}</Notice>}
                 <MetricsBar metrics={result.metrics} />
                 <LayerControl
                   visibility={visibility}
@@ -212,7 +235,10 @@ function App() {
                   onFocusPoint={(lat, lon) => mapRef.current?.flyTo(lat, lon)}
                 />
 
-                <div className="stitch-panel">
+                <section className="stitch-panel" aria-labelledby="stitch-heading">
+                  <h2 className="section-title" id="stitch-heading">
+                    Quick Stitch
+                  </h2>
                   <label className="stitch-field">
                     Backend
                     <select
@@ -235,47 +261,55 @@ function App() {
                       <option value="uncapped">Uncapped (every overlapping pair, slower)</option>
                     </select>
                   </label>
-                  <button onClick={handleQuickStitch} disabled={stitchState.status === "stitching"}>
+                  <button className="btn btn--primary" onClick={handleQuickStitch} disabled={stitchState.status === "stitching"}>
                     {stitchState.status === "stitching" ? "Stitching..." : "Quick Stitch"}
                   </button>
                   {stitchState.status === "stitching" && (
-                    <div className="progress">
-                      <div className="progress__bar">
-                        <div className="progress__fill" style={{ width: `${stitchState.progress.percent}%` }} />
-                      </div>
-                      <span>
-                        {STITCH_STAGE_LABELS[stitchState.progress.stage]} ({STITCH_STAGE_ORDER.indexOf(stitchState.progress.stage) + 1}/
-                        {STITCH_STAGE_ORDER.length}) - {stitchState.progress.percent}%
-                      </span>
-                    </div>
+                    <ProgressBar
+                      percent={stitchState.progress.percent}
+                      label={`${STITCH_STAGE_LABELS[stitchState.progress.stage]} (${STITCH_STAGE_ORDER.indexOf(stitchState.progress.stage) + 1}/${STITCH_STAGE_ORDER.length}) ${stitchState.progress.percent}%`}
+                    />
                   )}
                   {stitchState.status === "error" && stitchState.error && (
-                    <p className="error-banner">{stitchState.error}</p>
+                    <Notice variant="error">{stitchState.error}</Notice>
                   )}
                   {stitchState.status === "done" && stitchState.result && (
-                    <p className="export-status">
+                    <Notice variant="success">
                       Stitched {stitchState.result.photosUsed} photos via {stitchState.result.backend.toUpperCase()} (
                       {stitchState.result.neighborCap}, {stitchState.result.confidentPairs} confident pairs) in{" "}
-                      {(stitchState.result.durationMs / 1000).toFixed(1)}s -&gt; {stitchState.result.geotiffPath}
-                    </p>
+                      {(stitchState.result.durationMs / 1000).toFixed(1)}s. Saved to{" "}
+                      <code className="path">{stitchState.result.geotiffPath}</code>
+                    </Notice>
                   )}
-                </div>
+                </section>
 
-                <div className="export-row">
-                  <button onClick={() => handleExport("json")}>Export JSON</button>
-                  <button onClick={() => handleExport("pdf")}>Export PDF</button>
-                  <button className="ghost" onClick={handleReset}>
+                <section className="export-panel" aria-labelledby="export-heading">
+                  <h2 className="section-title" id="export-heading">
+                    Report
+                  </h2>
+                  <div className="export-row">
+                    <button className="btn btn--secondary" onClick={() => handleExport("json")}>
+                      Export JSON
+                    </button>
+                    <button className="btn btn--secondary" onClick={() => handleExport("pdf")}>
+                      Export PDF
+                    </button>
+                  </div>
+                  {exportStatus && (
+                    <Notice variant={exportStatus.startsWith("Export failed") ? "error" : "success"}>{exportStatus}</Notice>
+                  )}
+                  <button className="btn btn--ghost" onClick={handleReset}>
                     Scan another card
                   </button>
-                </div>
-                {exportStatus && <p className="export-status">{exportStatus}</p>}
+                </section>
               </>
             )}
           </>
         )}
+        </div>
       </aside>
 
-      <section className="map-panel">
+      <main className="map-panel" aria-label="Flight map">
         <FlightMap
           ref={mapRef}
           result={result}
@@ -283,8 +317,8 @@ function App() {
           stitchResult={stitchState.result}
           mosaicOpacity={mosaicOpacity}
         />
-      </section>
-    </main>
+      </main>
+    </div>
   );
 }
 
