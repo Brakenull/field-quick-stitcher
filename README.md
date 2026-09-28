@@ -10,14 +10,52 @@ A Tauri + React + TypeScript desktop app for QA-inspecting drone photo surveys i
 
 ## Getting started
 
+Windows 10/11 x64 is the supported platform.
+
+### 1. Install the prerequisites
+
+| Tool | Notes |
+| --- | --- |
+| [Visual Studio 2022 or later](https://visualstudio.microsoft.com/downloads/) (Community or Build Tools) | Workload **Desktop development with C++**, plus the individual component **C++ Clang Compiler for Windows**. The workload includes vcpkg; no separate vcpkg install is needed. (A standalone [LLVM](https://github.com/llvm/llvm-project/releases) in `C:\Program Files\LLVM` works instead of the Clang component.) |
+| [Node.js](https://nodejs.org/) 20 or later (LTS) | For the frontend. |
+| [Rust](https://rustup.rs/) | For the backend (Tauri). |
+| [Git](https://git-scm.com/download/win) | vcpkg downloads its package definitions with it. |
+
+Also needed: the two ONNX models in `src-tauri/resources/` (not in git, see the README there), and optionally a Protomaps key in `.env` for offline map downloads (see `.env.example`).
+
+### 2. Run the setup script
+
+In PowerShell, from the repository folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+It checks the prerequisites (and lists anything missing; it never installs them), then:
+
+1. installs the native libraries from `vcpkg.json` (OpenCV) with Visual Studio's vcpkg into `vcpkg_env\`. **The first run builds OpenCV from source, which takes 20–40+ minutes;**
+2. writes `src-tauri\.cargo\config.toml`, which tells cargo where OpenCV, libclang and the MSVC headers are (machine-specific and gitignored; see `.cargo/config.toml.example`);
+3. installs the npm packages;
+4. runs `cargo check`, which also generates the OpenCV bindings.
+
+It is safe to run again, for example after pulling changes or updating Visual Studio.
+
+| Option | Effect |
+| --- | --- |
+| `-LlvmBin <folder>` | Folder with `libclang.dll` and `clang.exe` (default: Visual Studio's Clang, then `C:\Program Files\LLVM\bin`) |
+| `-SkipNpm` | Skip `npm ci` |
+| `-SkipCheck` | Skip the final `cargo check` |
+| `-Clean` | Delete `vcpkg_env\` and `src-tauri\target\` first and rebuild everything |
+
+### 3. Start the app
+
 ```sh
-npm install
 npm run tauri dev
 ```
 
-This starts the full desktop app (Vite dev server + native window + backend). `npm run dev` alone only starts the frontend — the app's `invoke()` calls to the Rust backend won't work without the Tauri window.
+This starts the full desktop app (Vite dev server + native window + backend). `npm run dev` alone only starts the frontend — the app's `invoke()` calls to the Rust backend won't work without the Tauri window. `npm run tauri build` makes the Windows installer (`src-tauri\target\release\bundle\`).
 
-The Rust backend links against a native OpenCV build and needs machine-local paths configured in `src-tauri/.cargo/config.toml` (see `.cargo/config.toml.example`) before it will compile. If you're working on this app rather than just using it, see `CLAUDE.md` for the full architecture, build commands, and native-build troubleshooting.
+If you're working on this app rather than just using it, see `CLAUDE.md` for the full architecture, build commands, and native-build troubleshooting.
 
 ## Usage
 

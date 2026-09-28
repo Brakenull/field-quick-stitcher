@@ -1,58 +1,42 @@
-# Template for .cargo/config.toml (gitignored - machine-specific, not read by cargo
-# under this .example name). Copy to config.toml and fill in the placeholders for
-# opencv (Phase 2, Quick Stitch) to build without manually sourcing vcvars.
+# Reference for .cargo/config.toml (gitignored, machine-specific; cargo doesn't read this
+# .example name). You normally don't write config.toml by hand: setup.ps1 at the repo root
+# generates it from a Visual Studio developer shell. This file documents what it writes.
 #
-# GDAL was dropped per quick-stitch.md section 3 (replaced by the pure-Rust
-# `tiff` crate for GeoTIFF I/O), so only opencv's native toolchain is needed now.
-#
-# Prerequisites (do these first, outside this file):
-# 1. Visual Studio must have the "Desktop development with C++" workload installed,
-#    not just VS itself - a VS install can exist with no MSVC toolset at all (no
-#    VC\Tools\MSVC\<ver>\, no vcvars64.bat), in which case nothing below will work.
-#    Verify with:
-#      vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
-#    If that prints nothing, install the workload via the VS Installer first.
-# 2. vcpkg must be cloned + bootstrapped, and opencv4 actually installed into it:
-#      <vcpkg checkout>\bootstrap-vcpkg.bat
-#      <vcpkg checkout>\vcpkg install opencv4:x64-windows
-#    (from-source build, expect 20-40+ min). Confirm with `vcpkg list`.
-# 3. To regenerate INCLUDE/LIB below: open "Developer PowerShell for VS", run
-#      echo $env:INCLUDE
-#      echo $env:LIB
-#    and paste the results below (semicolon-separated, single-quoted).
+# Every entry is `force = true`: cargo's [env] otherwise leaves an already-set variable
+# alone, and a "Developer PowerShell for VS" sets VCPKG_ROOT to Visual Studio's own vcpkg.
 
 [env]
-VCPKG_ROOT = '<path to your vcpkg checkout, e.g. C:\vcpkg>'
-VCPKGRS_DYNAMIC = "1"
-LIBCLANG_PATH = '<path to LLVM bin, e.g. C:\Program Files\LLVM\bin>'
+# The folder setup.ps1 installs vcpkg.json's libraries into (<repo>\vcpkg_env), NOT
+# Visual Studio's vcpkg folder. The Rust vcpkg crate (0.2.x, used by the opencv crate)
+# only reads a classic vcpkg layout: <VCPKG_ROOT>\.vcpkg-root plus
+# <VCPKG_ROOT>\installed\<triplet>\ and <VCPKG_ROOT>\installed\vcpkg\status. It doesn't
+# understand manifest mode's vcpkg_installed\ folder, so setup.ps1 runs
+# `vcpkg install --x-install-root=vcpkg_env\installed` and creates the .vcpkg-root marker.
+# build.rs also reads it, to copy <VCPKG_ROOT>\installed\x64-windows\bin\*.dll next to the exe.
+VCPKG_ROOT = { value = '<repo>\vcpkg_env', force = true }
 
-# opencv-rust's build script checks the generic OPENCV_PACKAGE_NAME env var FIRST for
-# every probe method (pkg-config, cmake, AND vcpkg) - it shadows the more specific
-# OPENCV_PKGCONFIG_NAME/OPENCV_CMAKE_NAME/OPENCV_VCPKG_NAME vars whenever set. Don't
-# set OPENCV_PACKAGE_NAME globally on your machine (even for an unrelated cmake
-# project) - it will silently break the vcpkg probe here, since vcpkg installs the
-# port as `opencv4` (confirm with `vcpkg list`), not `OpenCV`. Instead set, as
-# machine-wide User/System env vars (outside this file):
-#   OPENCV_VCPKG_NAME=opencv4
-# and leave OPENCV_PACKAGE_NAME unset so cmake probing (package name "OpenCV") still
-# works too, should you ever get cmake/ninja installed. Also make sure no stale
-# OpenCV_DIR env var is lingering from a previous/relocated vcpkg checkout - it isn't
-# needed for the vcpkg probe and a dangling path just invites confusing failures.
+# Link OpenCV as DLLs (the x64-windows triplet), which build.rs copies and the MSI bundles.
+VCPKGRS_DYNAMIC = { value = '1', force = true }
 
-# clang (opencv's binding generator) needs the MSVC STL + Windows SDK headers/libs
-# that a "Developer Command Prompt" would normally set up via vcvars64.bat. Baked
-# in here so `cargo build`/`npm run tauri dev` work from a plain shell.
-INCLUDE = { value = '<paste $env:INCLUDE from a VS dev shell>', force = true }
-LIB = { value = '<paste $env:LIB from a VS dev shell>', force = true }
+# opencv-rust's build script checks the generic OPENCV_PACKAGE_NAME env var first for every
+# probe method. A machine-wide value left over from an unrelated CMake project (e.g.
+# `OpenCV`) silently breaks the vcpkg probe, since vcpkg installs the port as `opencv4`.
+OPENCV_PACKAGE_NAME = { value = 'opencv4', force = true }
 
-# cargo's [env] cannot override PATH (confirmed empirically - force=true has no
-# effect on PATH specifically, cargo always keeps its own). So instead of trying
-# to get clang.exe onto PATH, point clang-sys straight at the binary - it reads
-# CLANG_PATH directly, bypassing PATH search entirely.
-CLANG_PATH = '<path to clang.exe, e.g. C:\Program Files\LLVM\bin\clang.exe>'
+# Only the vcpkg probe (plus the explicit OPENCV_INCLUDE_PATHS/OPENCV_LINK_* "environment"
+# probe) runs, so a CMake or pkg-config OpenCV elsewhere on the machine is never picked up.
+OPENCV_DISABLE_PROBES = { value = 'pkg_config,cmake,vcpkg_cmake', force = true }
 
-# vcpkg's installed\x64-windows\bin carries the opencv DLLs (and their
-# transitive deps) needed at runtime. Since PATH can't be set here, add that
-# directory to your own Windows user or system PATH once (a normal one-time
-# machine setup step, e.g. <vcpkg checkout>\installed\x64-windows\bin) so
-# `cargo run`/`tauri dev` can load them.
+# libclang for opencv's binding generator (via clang-sys). setup.ps1 prefers Visual Studio's
+# "C++ Clang Compiler for Windows" component (<VS>\VC\Tools\Llvm\x64\bin), then
+# C:\Program Files\LLVM\bin. cargo's [env] can't change PATH, so clang-sys gets clang.exe
+# through CLANG_PATH directly.
+LIBCLANG_PATH = { value = '<folder with libclang.dll>', force = true }
+CLANG_PATH = { value = '<that folder>\clang.exe', force = true }
+
+# The MSVC STL + Windows SDK headers/libs a developer shell sets up (vcvars64.bat), baked in
+# so `cargo build` / `npm run tauri dev` work from a plain shell. Copied from $env:INCLUDE
+# and $env:LIB of the developer shell setup.ps1 opens; rerun setup.ps1 after a Visual Studio
+# or Windows SDK update changes these versioned paths.
+INCLUDE = { value = '<$env:INCLUDE from a VS developer shell>', force = true }
+LIB = { value = '<$env:LIB from a VS developer shell>', force = true }

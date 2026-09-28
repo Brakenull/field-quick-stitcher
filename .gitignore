@@ -33,3 +33,5 @@ src-tauri/resources/*
 !src-tauri/resources/README.md
 
 .env
+# vcpkg libraries installed by setup.ps1 from vcpkg.json
+vcpkg_env/

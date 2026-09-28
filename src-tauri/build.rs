@@ -40,7 +40,8 @@ fn embed_protomaps_key() {
 }
 
 /// `cargo`'s `[env]` config can't override `PATH` (see `.cargo/config.toml`), so
-/// opencv/gdal's DLLs (and their transitive deps) from vcpkg's `installed/x64-windows/bin`
+/// opencv's DLLs (and their transitive deps) from vcpkg's `installed/x64-windows/bin`
+/// (`VCPKG_ROOT` is `<repo>/vcpkg_env`, set up by `setup.ps1`)
 /// won't otherwise be found when `cargo run`/`tauri dev` launches the built exe.
 /// Windows always searches the exe's own directory for DLLs regardless of PATH,
 /// so copy them there instead. Only runs on Windows when VCPKG_ROOT is set; a

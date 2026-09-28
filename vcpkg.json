@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "field-stitch",
+  "version": "1.1.0",
+  "description": "Native libraries for the Rust backend (src-tauri): OpenCV, linked by the opencv crate. setup.ps1 installs them into vcpkg_env\\installed.",
+  "dependencies": [
+    {
+      "name": "opencv4",
+      "default-features": false,
+      "features": [
+        "calib3d",
+        "directml",
+        "dnn",
+        "dshow",
+        "fs",
+        "gapi",
+        "highgui",
+        "intrinsics",
+        "jpeg",
+        "msmf",
+        "png",
+        "quirc",
+        "thread",
+        "tiff",
+        "webp",
+        "win32ui"
+      ]
+    }
+  ],
+  "builtin-baseline": "cd49c5c9fec3f600b63952873168c011aa253c73"
+}

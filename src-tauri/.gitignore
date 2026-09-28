@@ -9,3 +9,4 @@
 # Machine-specific opencv toolchain paths (VS/vcpkg/LLVM install locations).
 # See .cargo/config.toml.example for the template and how to regenerate.
 /.cargo/config.toml
+/.cargo/config.toml.bak
