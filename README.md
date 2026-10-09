@@ -8,6 +8,16 @@ A Tauri + React + TypeScript desktop app for QA-inspecting drone photo surveys i
 - **Quick Stitch** — from the most recent Inspect scan, run a coarse-but-real image-stitching pipeline (feature matching + RANSAC + pose-graph optimization) to produce a georeferenced GeoTIFF orthomosaic, shown as an overlay on the map.
 - **Offline basemap** — download a real, detailed vector map for your survey area while you still have signal, so the map underneath your flight data still shows real geography once you're out in the field. See [Offline basemap](#offline-basemap) below.
 
+## Screenshots
+
+<p align="center">
+  <a href="https://r2.brakenull.dev/Screenshots/field-stitch/01.png"><img src="https://r2.brakenull.dev/Screenshots/field-stitch/01.png" alt="Field Stitch screenshot 1" width="49%"></a>
+  <a href="https://r2.brakenull.dev/Screenshots/field-stitch/02.png"><img src="https://r2.brakenull.dev/Screenshots/field-stitch/02.png" alt="Field Stitch screenshot 2" width="49%"></a>
+  <br>
+  <a href="https://r2.brakenull.dev/Screenshots/field-stitch/03.png"><img src="https://r2.brakenull.dev/Screenshots/field-stitch/03.png" alt="Field Stitch screenshot 3" width="49%"></a>
+  <a href="https://r2.brakenull.dev/Screenshots/field-stitch/04.png"><img src="https://r2.brakenull.dev/Screenshots/field-stitch/04.png" alt="Field Stitch screenshot 4" width="49%"></a>
+</p>
+
 ## Getting started
 
 Windows 10/11 x64 is the supported platform.
@@ -58,6 +68,14 @@ This starts the full desktop app (Vite dev server + native window + backend). `n
 If you're working on this app rather than just using it, see `CLAUDE.md` for the full architecture, build commands, and native-build troubleshooting.
 
 ## Usage
+
+### Try it with demo data
+
+No drone photos of your own? Use the demo survey: 156 DJI photos of the Jablunkov Pass fortifications in Czechia.
+
+1. Download `Jablunkov_Pass_Fortifications_CZ.zip` (~820 MB).
+2. Extract it. You'll get a `Jablunkov_Pass_Fortifications_CZ\` folder with `dji_0001.jpg` … `dji_0156.jpg` inside.
+3. Start the app and drag the `Jablunkov_Pass_Fortifications_CZ` folder onto the sidebar, or pick it with "Browse folder…". Then follow [Inspect](#inspect) and [Quick Stitch](#quick-stitch) below.
 
 ### Inspect
 
